@@ -100,6 +100,52 @@ def fetch_stock_data(ticker_symbol):
     except Exception as e:
         return {"error": str(e)}, False
 
+# --- AUTO-CLASSIFICATION ENGINE (FOR NARRATIVE DROPDOWNS) ---
+def classify_narrative_defaults(stock_data, ind_avg_margin):
+    """
+    Analyzes historical base rates to dynamically set the narrative dropdown defaults.
+    Ensures mature giants don't default to 'Emerging Disruptor' narratives on load.
+    """
+    # 1. TAM / Growth Narrative
+    growth = stock_data["revenue_growth_1y"]
+    if growth > 0.22:
+        tam_idx = 0  # Market Disruptor
+    elif growth >= 0.05:
+        tam_idx = 1  # Healthy Competitor
+    else:
+        tam_idx = 2  # Niche Player
+
+    # 2. Moat / Competitive Edge
+    margin = stock_data["operating_margin"]
+    if margin > 0.24 or margin > (ind_avg_margin + 0.06):
+        moat_idx = 0  # Monopoly / Network Effects
+    elif margin >= 0.10:
+        moat_idx = 1  # Sustainable Advantage
+    else:
+        moat_idx = 2  # Commodity Player
+
+    # 3. Reinvestment / Asset Intensity
+    sector = stock_data["sector"].lower()
+    industry = stock_data["industry"].lower()
+    if "software" in industry or "software" in sector or "internet" in industry:
+        reinvest_idx = 0  # Asset-Light
+    elif "oil" in industry or "gas" in industry or "steel" in industry or "utility" in sector or "automotive" in industry or "hardware" in industry:
+        reinvest_idx = 2  # Capital Intensive
+    else:
+        reinvest_idx = 1  # Balanced Reinvestment
+
+    # 4. Risk Profile
+    debt = stock_data["debt_to_equity"]
+    mcap = stock_data["market_cap"]
+    if mcap > 100e9 and debt < 0.6:
+        risk_idx = 2  # Low Risk
+    elif mcap < 10e9 or debt > 1.4:
+        risk_idx = 0  # High Risk
+    else:
+        risk_idx = 1  # Average Corporate Risk
+
+    return tam_idx, moat_idx, reinvest_idx, risk_idx
+
 # --- 2-STAGE VALUATION MATHEMATICS ---
 def calculate_2stage_dcf(rev_0, margin_0, target_margin, growth_high, sc_ratio, wacc_high, terminal_growth=0.03, terminal_wacc=0.075, tax_rate=0.21, return_details=False):
     """
@@ -215,18 +261,23 @@ else:
     ind_avg_margin = 0.15
     ind_avg_ps = 3.0
 
+# Calculate optimal base narrative defaults dynamically
+default_tam, default_moat, default_reinvestment, default_risk = classify_narrative_defaults(stock_data, ind_avg_margin)
+
 # SIDEBAR: Interactive Narrative Sandbox
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📖 Step 1: Tell your Business Story")
 
-# Qualitative Narrative Story Builders
+# Qualitative Narrative Story Builders (Default selected index is now dynamically determined)
 story_tam = st.sidebar.selectbox(
     "Market TAM & Growth Narrative",
     [
         "Market Disruptor (Massive TAM, Rapid Scale)",
         "Healthy Competitor (Moderate Growth, Regional Expansion)",
         "Niche Player (Mature, Slower Defense Play)"
-    ]
+    ],
+    index=default_tam,
+    key=f"selectbox_tam_{stock_data['ticker']}"
 )
 
 story_moat = st.sidebar.selectbox(
@@ -235,7 +286,9 @@ story_moat = st.sidebar.selectbox(
         "Monopoly / Network Effects (High Pricing Power)",
         "Sustainable Advantage / Switching Costs (Moderate Protection)",
         "Commodity Player (No Moat, High Price Competition)"
-    ]
+    ],
+    index=default_moat,
+    key=f"selectbox_moat_{stock_data['ticker']}"
 )
 
 story_reinvestment = st.sidebar.selectbox(
@@ -244,7 +297,9 @@ story_reinvestment = st.sidebar.selectbox(
         "Asset-Light (High Capital Efficiency / Software Model)",
         "Balanced Reinvestment (Industry Standard / Shared Model)",
         "Capital Intensive (Low Efficiency / Heavy Factories & CapEx)"
-    ]
+    ],
+    index=default_reinvestment,
+    key=f"selectbox_reinvest_{stock_data['ticker']}"
 )
 
 story_risk = st.sidebar.selectbox(
@@ -253,7 +308,9 @@ story_risk = st.sidebar.selectbox(
         "High Risk (Emerging Venture / Volatile Market)",
         "Average Corporate Risk (Established Player)",
         "Low Risk (High Moat / Stably Capitalized / Strong Cash Balance)"
-    ]
+    ],
+    index=default_risk,
+    key=f"selectbox_risk_{stock_data['ticker']}"
 )
 
 # --- AUTO-DYNAMIC NARRATIVE ENGINE (STOCK & PEER PEGGED) ---
