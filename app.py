@@ -60,20 +60,29 @@ def fetch_stock_data(ticker_symbol):
         # Safely extract balance sheet items to get net debt and shares
         shares = info.get("sharesOutstanding", 1.0) or 1.0
         
+        # Safely capture cash and debt
+        cash = info.get("totalCash", 0) or 0
+        total_debt = info.get("totalDebt", 0) or 0
+        
+        # Guardrail for actual operating margin to prevent extreme accounting noise (like digital asset impairment)
+        raw_operating_margin = info.get("operatingMargins", 0.10)
+        if raw_operating_margin is None:
+            raw_operating_margin = 0.10
+            
         data = {
             "ticker": ticker_symbol.upper(),
             "company_name": info.get("longName", info.get("shortName", "Unknown Company")),
             "sector": info.get("sector", "Unknown Sector"),
             "industry": info.get("industry", "Unknown Industry"),
             "revenue_ttm": info.get("totalRevenue", info.get("trailingRevenue", 100_000_000)) or 100_000_000,
-            "operating_margin": info.get("operatingMargins", 0.10) or 0.10,
+            "operating_margin": raw_operating_margin,
             "net_margin": info.get("profitMargins", 0.05) or 0.05,
             "debt_to_equity": info.get("debtToEquity", 50.0) / 100.0 if info.get("debtToEquity") else 0.5,
             "current_price": info.get("currentPrice", info.get("regularMarketPrice", 1.0)) or 1.0,
             "market_cap": info.get("marketCap", 0) or 1_000_000,
             "shares_outstanding": shares,
-            "cash": info.get("totalCash", 0) or 0,
-            "total_debt": info.get("totalDebt", 0) or 0,
+            "cash": cash,
+            "total_debt": total_debt,
         }
 
         # Calculate revenue growth safely
@@ -115,8 +124,8 @@ def classify_narrative_defaults(stock_data, ind_avg_margin):
     else:
         tam_idx = 2  # Niche Player
 
-    # 2. Moat / Competitive Edge
-    margin = stock_data["operating_margin"]
+    # Apply sanity clip on operating margin to classify moats accurately
+    margin = max(-0.50, stock_data["operating_margin"])
     if margin > 0.24 or margin > (ind_avg_margin + 0.06):
         moat_idx = 0  # Monopoly / Network Effects
     elif margin >= 0.10:
@@ -153,6 +162,10 @@ def calculate_2stage_dcf(rev_0, margin_0, target_margin, growth_high, sc_ratio, 
     Stage 1 (Years 1-5): High Growth, linear margin transition, reinvestment based on incremental sales.
     Stage 2 (Terminal): Capped Growth (Economy growth), reinvestment based on stable ROC.
     """
+    # FINANCIAL GUARDRAIL: Clip the starting operating margin to a sensible floor (e.g., -40%)
+    # This prevents mathematical disasters (like starting at -11,641% for write-offs or impairment spikes)
+    margin_start = max(-0.40, margin_0)
+
     revenues = []
     margins = []
     ebits = []
@@ -169,8 +182,8 @@ def calculate_2stage_dcf(rev_0, margin_0, target_margin, growth_high, sc_ratio, 
         current_rev = prev_rev * (1 + growth_high)
         revenues.append(current_rev)
 
-        # Operating margin transitions linearly from current to target
-        current_margin = margin_0 + (target_margin - margin_0) * (year / 5.0)
+        # Operating margin transitions linearly from normalized start to target
+        current_margin = margin_start + (target_margin - margin_start) * (year / 5.0)
         margins.append(current_margin)
 
         ebit = current_rev * current_margin
@@ -181,6 +194,7 @@ def calculate_2stage_dcf(rev_0, margin_0, target_margin, growth_high, sc_ratio, 
         reinvestment = max(0.0, delta_rev / sc_ratio)
         reinvestments.append(reinvestment)
 
+        # EBIT cannot be lower than total revenue (loss cap helper)
         nopat = ebit * (1 - tax_rate)
         fcff = nopat - reinvestment
         fcffs.append(fcff)
@@ -330,18 +344,19 @@ else:
     calc_growth = min(base_growth_anchor * 0.4, 0.05)
 
 # 2. Operating Margin Translation Pegged to Ticker actual margins and industry averages
-actual_margin = stock_data["operating_margin"]
+# We apply a safety clip to prevent starting with wild -11,000% operating values
+actual_margin_clipped = max(-0.40, stock_data["operating_margin"])
 
 if "Monopoly" in story_moat:
     # Premium: converges above company actuals and industry peer average
-    calc_margin = max(actual_margin + 0.06, ind_avg_margin + 0.08)
+    calc_margin = max(actual_margin_clipped + 0.06, ind_avg_margin + 0.08)
     calc_margin = min(0.60, calc_margin)
 elif "Sustainable" in story_moat:
     # Normalization: tracks best of current margin or industry peers
-    calc_margin = max(actual_margin, ind_avg_margin)
+    calc_margin = max(actual_margin_clipped, ind_avg_margin)
 else:
     # Squeezed: tracks a fraction of current/industry margins, capped at low single digit
-    calc_margin = max(0.02, min(actual_margin * 0.5, ind_avg_margin * 0.5, 0.06))
+    calc_margin = max(0.02, min(actual_margin_clipped * 0.5, ind_avg_margin * 0.5, 0.06))
 
 # 3. Capital Efficiency Pegged to Asset Strategy
 calc_sc = 3.5 if "Asset-Light" in story_reinvestment else 1.5 if "Balanced" in story_reinvestment else 0.7
@@ -393,7 +408,12 @@ with m1:
 with m2:
     st.metric("TTM Revenue", f"${stock_data['revenue_ttm']/1e9:.2f}B")
 with m3:
-    st.metric("Actual Margin", f"{stock_data['operating_margin']*100:.1f}%")
+    # Display the actual raw margin but highlight that we normalize inside DCF calculations if extreme
+    st.metric(
+        "Actual Margin", 
+        f"{stock_data['operating_margin']*100:.1f}%",
+        help="Note: If this margin is extremely negative due to asset impairment (such as Bitcoin holding adjustments), our cashflow models automatically apply an adjustment floor of -40% to prevent projection distortion."
+    )
 with m4:
     st.metric("Actual Growth (1Yr)", f"{stock_data['revenue_growth_1y']*100:.1f}%")
 
