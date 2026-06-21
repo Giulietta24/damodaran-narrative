@@ -1,5 +1,3 @@
-# narrative_dashboard_dynamic.py
-
 import streamlit as st
 import yfinance as yf
 import plotly.express as px
@@ -7,7 +5,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Dynamic Damodaran Dashboard", layout="wide")
+st.set_page_config(page_title="Dynamic Damodaran Narrative Dashboard", layout="wide")
 
 st.title("📊 Dynamic Damodaran Narrative Dashboard")
 st.caption("This dashboard turns a business story into value, step by step.")
@@ -104,6 +102,15 @@ def auto_map_to_drivers(stock_data, narrative, damodaran_df):
         "industry_ps": industry_ps,
     }
 
+def score_driver(actual, implied, scale=1.0):
+    if actual is None or implied is None:
+        return 0
+    if implied == 0:
+        return 50
+    diff = abs(actual - implied) / max(abs(implied), 1e-9)
+    score = 100 - (diff * 100 / scale)
+    return int(max(0, min(100, round(score))))
+
 def monte_carlo_valuation(stock_data, drivers, n_sim=10000, seed=42):
     np.random.seed(seed)
 
@@ -138,15 +145,27 @@ def section_help(title, meaning, story_link):
         st.info(story_link, icon="ℹ️")
 
 damodaran_df = load_damodaran_industry_data()
-ticker_input = st.sidebar.text_input("Enter Ticker", value="AAPL")
-stock_data, success = fetch_stock_data(ticker_input)
 
+st.sidebar.header("🔍 Company Selector")
+ticker_input = st.sidebar.text_input("Enter Ticker", value="AAPL")
+
+stock_data, success = fetch_stock_data(ticker_input)
 if not success:
     st.error(f"Could not fetch data for {ticker_input}: {stock_data.get('error', 'Unknown error')}")
     st.stop()
 
 narrative = auto_narrative_from_data(stock_data)
 drivers = auto_map_to_drivers(stock_data, narrative, damodaran_df)
+
+actual_rev_growth = stock_data["revenue_growth_1y"]
+actual_margin = stock_data["operating_margin"]
+actual_risk_proxy = stock_data["debt_to_equity"]
+
+growth_support = score_driver(actual_rev_growth, drivers["revenue_growth"], scale=0.20)
+margin_support = score_driver(actual_margin, drivers["op_margin"], scale=0.15)
+risk_support = score_driver(1 / max(actual_risk_proxy + 1, 1), 1 / max(drivers["wacc"] + 1, 1), scale=0.25)
+
+overall_support = int(round((growth_support + margin_support + risk_support) / 3))
 
 st.header("🏢 Company Overview")
 st.caption("This is the starting point: who the company is and what it sells.")
@@ -161,8 +180,31 @@ c3.metric("1Y Revenue Growth", f"{stock_data['revenue_growth_1y']*100:.1f}%")
 
 section_help(
     "What this means",
-    "This section tells you the current business facts before any forecasting starts.",
-    "It matters because Damodaran says valuation should begin with the real business, not with the model."
+    "This section shows the current business facts before any forecasting starts.",
+    "Damodaran says valuation should begin with the actual business, not the model."
+)
+
+st.header("Narrative Support")
+st.caption("These scores show how well the story is backed by the data.")
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Growth support", f"{growth_support}/100", help="How well the growth story matches the data.")
+c2.metric("Margin support", f"{margin_support}/100", help="How well the moat story matches profits.")
+c3.metric("Risk support", f"{risk_support}/100", help="How well the risk story matches WACC.")
+c4.metric("Overall support", f"{overall_support}/100", help="Overall narrative support score.")
+
+with st.expander("What the scores mean", expanded=False):
+    st.markdown("""
+    - 80–100 = strongly supported
+    - 60–79 = mostly supported
+    - 40–59 = mixed support
+    - Below 40 = weak support
+    """)
+
+section_help(
+    "How to read this",
+    "Higher scores mean the story is better supported by current financial data and assumptions.",
+    "The weakest score shows where the narrative is most fragile."
 )
 
 st.header("1️⃣ Company Story")
@@ -177,7 +219,7 @@ c3.write(f"**Execution:** {narrative['execution_plan']}")
 section_help(
     "What this means",
     "TAM is the market opportunity, moat is why the company can keep profits, and execution is how it grows.",
-    "This is the story layer Damodaran says should come before the numbers."
+    "This is the story layer Damodaran wants before the numbers."
 )
 
 st.header("2️⃣ How Story Becomes Numbers")
@@ -228,7 +270,7 @@ if len(value_sim) < 10:
 else:
     p20, p80 = np.nanpercentile(value_sim, [20, 80])
     st.write(f"60% Range: **${p20/1e9:.2f}B – ${p80/1e9:.2f}B**")
-    st.caption("This graph shows the likely range of value, not a single exact number.")
+    st.caption("This chart shows the range of possible values if the story plays out differently.")
 
     fig_dist = px.histogram(value_sim, nbins=50, title="Monte Carlo Valuation Distribution")
     fig_dist.update_xaxes(title_text="Intrinsic Value ($)")
@@ -238,7 +280,7 @@ else:
 section_help(
     "What this graph means",
     "The histogram shows where most valuation outcomes land after many simulated futures.",
-    "If the story is strong, the whole distribution shifts higher; if it is weak, it shifts lower."
+    "If the story is strong, the whole distribution shifts higher; if weak, it shifts lower."
 )
 
 st.header("4️⃣ What Value Does the Story Imply?")
@@ -293,7 +335,7 @@ try:
                 fig_hist.update_xaxes(title_text="Year")
                 fig_hist.update_yaxes(title_text="Growth %")
                 st.plotly_chart(fig_hist, use_container_width=True)
-                st.caption("If this line of growth matches the story, the model is more believable.")
+                st.caption("If this growth matches the story, the model is more believable.")
             else:
                 st.info("Not enough historical revenue points.")
         else:
