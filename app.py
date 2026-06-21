@@ -32,7 +32,7 @@ def load_damodaran_industry_data():
     """Fetches stable industry statistics from Damodaran's database with a robust local fallback."""
     url = "https://pages.stern.nyu.edu/~adamodar/pc/datasets/psdata.xls"
     try:
-        # Load Excel, skip metadata rows if present, or clean up columns
+        # Load Excel, clean up columns
         df = pd.read_excel(url)
         df.columns = [str(c).strip() for c in df.columns]
         # Clean up key metrics
@@ -256,20 +256,74 @@ story_risk = st.sidebar.selectbox(
     ]
 )
 
-# Translate qualitative selections into logical default metrics
-calc_growth = 0.35 if "Disruptor" in story_tam else 0.12 if "Competitor" in story_tam else 0.04
-calc_margin = 0.30 if "Monopoly" in story_moat else 0.15 if "Sustainable" in story_moat else 0.05
-calc_sc = 3.0 if "Asset-Light" in story_reinvestment else 1.5 if "Balanced" in story_reinvestment else 0.7
-calc_wacc = 0.11 if "High Risk" in story_risk else 0.08 if "Average" in story_risk else 0.065
+# --- AUTO-DYNAMIC NARRATIVE ENGINE (STOCK & PEER PEGGED) ---
+# 1. Growth Translation Pegged to Ticker actual TTM/1Yr Growth and industry norms
+historical_growth = stock_data["revenue_growth_1y"]
+base_growth_anchor = max(0.01, min(0.35, historical_growth))
+
+if "Disruptor" in story_tam:
+    # Aggressive: scales actual performance or establishes a strong baseline of 25% up to 60%
+    calc_growth = max(base_growth_anchor * 1.5, 0.25)
+    calc_growth = min(0.65, calc_growth)
+elif "Competitor" in story_tam:
+    # Moderate: tracks company's historical speed, at least 8%
+    calc_growth = max(base_growth_anchor, 0.08)
+else:
+    # Niche: defense play, tracks structural terminal growth (capped at 5%)
+    calc_growth = min(base_growth_anchor * 0.4, 0.05)
+
+# 2. Operating Margin Translation Pegged to Ticker actual margins and industry averages
+actual_margin = stock_data["operating_margin"]
+
+if "Monopoly" in story_moat:
+    # Premium: converges above company actuals and industry peer average
+    calc_margin = max(actual_margin + 0.06, ind_avg_margin + 0.08)
+    calc_margin = min(0.60, calc_margin)
+elif "Sustainable" in story_moat:
+    # Normalization: tracks best of current margin or industry peers
+    calc_margin = max(actual_margin, ind_avg_margin)
+else:
+    # Squeezed: tracks a fraction of current/industry margins, capped at low single digit
+    calc_margin = max(0.02, min(actual_margin * 0.5, ind_avg_margin * 0.5, 0.06))
+
+# 3. Capital Efficiency Pegged to Asset Strategy
+calc_sc = 3.5 if "Asset-Light" in story_reinvestment else 1.5 if "Balanced" in story_reinvestment else 0.7
+
+# 4. Cost of Capital Pegged to Risk & Leverage proxy
+base_wacc = 0.08 + (stock_data["debt_to_equity"] * 0.005)
+calc_wacc = base_wacc + 0.03 if "High Risk" in story_risk else base_wacc if "Average" in story_risk else base_wacc - 0.015
+calc_wacc = max(0.04, min(0.18, calc_wacc))
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔢 Step 2: Fine-Tune the Valuation Drivers")
 
-# Slider controls initialized dynamically by the Story choices
-growth_rate = st.sidebar.slider("High Growth Rate (Yr 1-5)", 0.0, 0.80, float(calc_growth), 0.01, format="%.0f%%")
-target_margin = st.sidebar.slider("Target Operating Margin (Yr 5)", -0.10, 0.60, float(calc_margin), 0.01, format="%.0f%%")
-sales_to_cap = st.sidebar.slider("Capital Efficiency (Sales-to-Capital)", 0.1, 5.0, float(calc_sc), 0.1)
-cost_of_capital = st.sidebar.slider("Cost of Capital (WACC)", 0.04, 0.20, float(calc_wacc), 0.005, format="%.1f%%")
+# Streamlit Lock Workaround: Unique key incorporating narrative state and ticker forces dynamic reset
+slider_reset_key = f"{story_tam}_{story_moat}_{story_reinvestment}_{story_risk}_{stock_data['ticker']}"
+
+# Slider controls initialized dynamically by the dynamic Story presets
+growth_rate = st.sidebar.slider(
+    "High Growth Rate (Yr 1-5)", 
+    0.0, 0.80, float(calc_growth), 0.01, 
+    format="%.0f%%", 
+    key=f"growth_s_{slider_reset_key}"
+)
+target_margin = st.sidebar.slider(
+    "Target Operating Margin (Yr 5)", 
+    -0.10, 0.60, float(calc_margin), 0.01, 
+    format="%.0f%%", 
+    key=f"margin_s_{slider_reset_key}"
+)
+sales_to_cap = st.sidebar.slider(
+    "Capital Efficiency (Sales-to-Capital)", 
+    0.1, 5.0, float(calc_sc), 0.1, 
+    key=f"cap_s_{slider_reset_key}"
+)
+cost_of_capital = st.sidebar.slider(
+    "Cost of Capital (WACC)", 
+    0.04, 0.20, float(calc_wacc), 0.005, 
+    format="%.1f%%", 
+    key=f"wacc_s_{slider_reset_key}"
+)
 
 # --- CONSOLIDATING THE REAL DATA VS IMPLIED NARRATIVE ---
 st.header(f"🏢 {stock_data['company_name']} ({stock_data['ticker']})")
