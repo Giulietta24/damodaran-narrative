@@ -1,0 +1,7 @@
+# narrative_dashboard_dynamic requirements
+streamlit>=1.28.0
+yfinance>=0.2.28
+plotly>=5.17.0
+pandas>=2.1.0
+numpy>=1.24.0
+openpyxl>=3.1.2
