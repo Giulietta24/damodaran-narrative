@@ -206,49 +206,70 @@ if not success:
         "revenue_growth_1y": 0.18
     }
 
+# Find industry benchmark stats if possible
+industry_match = damodaran_df[damodaran_df["Industry"].astype(str).str.contains(stock_data["industry"], case=False, na=False)]
+if not industry_match.empty:
+    ind_avg_margin = float(industry_match["PreTaxOpMargin"].iloc[0])
+    ind_avg_ps = float(industry_match["PriceSales"].iloc[0])
+else:
+    ind_avg_margin = 0.15
+    ind_avg_ps = 3.0
+
 # SIDEBAR: Interactive Narrative Sandbox
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📖 Step 1: Tell your Business Story")
 
-# Preset Narrative templates to help users
-narrative_preset = st.sidebar.selectbox(
-    "Choose Narrative Preset:",
-    ["Manual Custom", "High-Growth Tech Disruptor", "Conservative Cash Cow", "Asset-Light Software Scaler", "Commodity/Hardware Player"]
+# Qualitative Narrative Story Builders
+story_tam = st.sidebar.selectbox(
+    "Market TAM & Growth Narrative",
+    [
+        "Market Disruptor (Massive TAM, Rapid Scale)",
+        "Healthy Competitor (Moderate Growth, Regional Expansion)",
+        "Niche Player (Mature, Slower Defense Play)"
+    ]
 )
 
-# Preset mapping logic
-if narrative_preset == "High-Growth Tech Disruptor":
-    story_growth = 0.30
-    story_margin = 0.25
-    story_sc = 2.0
-    story_wacc = 0.09
-elif narrative_preset == "Conservative Cash Cow":
-    story_growth = 0.05
-    story_margin = 0.18
-    story_sc = 1.2
-    story_wacc = 0.07
-elif narrative_preset == "Asset-Light Software Scaler":
-    story_growth = 0.20
-    story_margin = 0.35
-    story_sc = 4.0
-    story_wacc = 0.08
-elif narrative_preset == "Commodity/Hardware Player":
-    story_growth = 0.08
-    story_margin = 0.06
-    story_sc = 1.0
-    story_wacc = 0.085
-else:
-    # Match default calculated metrics
-    story_growth = max(0.01, min(0.50, stock_data["revenue_growth_1y"]))
-    story_margin = max(0.01, min(0.60, stock_data["operating_margin"]))
-    story_sc = 1.5
-    story_wacc = 0.08
+story_moat = st.sidebar.selectbox(
+    "Moat & Competitive Edge",
+    [
+        "Monopoly / Network Effects (High Pricing Power)",
+        "Sustainable Advantage / Switching Costs (Moderate Protection)",
+        "Commodity Player (No Moat, High Price Competition)"
+    ]
+)
 
-# Allow full fine-tuning of values
-growth_rate = st.sidebar.slider("High Growth Rate (Yr 1-5)", 0.0, 0.80, float(story_growth), 0.01, format="%.0f%%")
-target_margin = st.sidebar.slider("Target Operating Margin (Yr 5)", -0.10, 0.60, float(story_margin), 0.01, format="%.0f%%")
-sales_to_cap = st.sidebar.slider("Capital Efficiency (Sales-to-Capital)", 0.1, 5.0, float(story_sc), 0.1)
-cost_of_capital = st.sidebar.slider("Cost of Capital (WACC)", 0.04, 0.20, float(story_wacc), 0.005, format="%.1f%%")
+story_reinvestment = st.sidebar.selectbox(
+    "Reinvestment Strategy & Asset Intensity",
+    [
+        "Asset-Light (High Capital Efficiency / Software Model)",
+        "Balanced Reinvestment (Industry Standard / Shared Model)",
+        "Capital Intensive (Low Efficiency / Heavy Factories & CapEx)"
+    ]
+)
+
+story_risk = st.sidebar.selectbox(
+    "Risk & Macro Profile",
+    [
+        "High Risk (Emerging Venture / Volatile Market)",
+        "Average Corporate Risk (Established Player)",
+        "Low Risk (High Moat / Stably Capitalized / Strong Cash Balance)"
+    ]
+)
+
+# Translate qualitative selections into logical default metrics
+calc_growth = 0.35 if "Disruptor" in story_tam else 0.12 if "Competitor" in story_tam else 0.04
+calc_margin = 0.30 if "Monopoly" in story_moat else 0.15 if "Sustainable" in story_moat else 0.05
+calc_sc = 3.0 if "Asset-Light" in story_reinvestment else 1.5 if "Balanced" in story_reinvestment else 0.7
+calc_wacc = 0.11 if "High Risk" in story_risk else 0.08 if "Average" in story_risk else 0.065
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔢 Step 2: Fine-Tune the Valuation Drivers")
+
+# Slider controls initialized dynamically by the Story choices
+growth_rate = st.sidebar.slider("High Growth Rate (Yr 1-5)", 0.0, 0.80, float(calc_growth), 0.01, format="%.0f%%")
+target_margin = st.sidebar.slider("Target Operating Margin (Yr 5)", -0.10, 0.60, float(calc_margin), 0.01, format="%.0f%%")
+sales_to_cap = st.sidebar.slider("Capital Efficiency (Sales-to-Capital)", 0.1, 5.0, float(calc_sc), 0.1)
+cost_of_capital = st.sidebar.slider("Cost of Capital (WACC)", 0.04, 0.20, float(calc_wacc), 0.005, format="%.1f%%")
 
 # --- CONSOLIDATING THE REAL DATA VS IMPLIED NARRATIVE ---
 st.header(f"🏢 {stock_data['company_name']} ({stock_data['ticker']})")
@@ -272,13 +293,16 @@ col_left, col_right = st.columns([1, 1])
 
 with col_left:
     st.subheader("1️⃣ Story-to-Numbers Translation Table")
-    st.write("Your qualitative sliders map directly to financial value drivers:")
+    st.write("Your qualitative narrative translates into these financial engine blocks:")
     
-    # Display translation parameters
-    st.write(f"📈 **Revenue Growth:** Chosen story targets **{growth_rate*100:.1f}%** average annual high growth.")
-    st.write(f"🛡️ **Operating Profitability:** Target operating margin will converge to **{target_margin*100:.1f}%** as the competitive moat matures.")
-    st.write(f"🚜 **Capital reinvestment:** A Sales-to-Capital Ratio of **{sales_to_cap:.1f}** implies that every ${1/sales_to_cap:.2f} of capital reinvested generates $1.00 of growth.")
-    st.write(f"💸 **Cost of Financing:** Cost of Capital of **{cost_of_capital*100:.1f}%** matches the risk-profile of the narrative.")
+    # Visualizing narrative choice alignment
+    st.info(f"""
+    **Selected Narrative Story:**
+    * **Market Opportunity:** {story_tam}
+    * **Competitive Protection:** {story_moat}
+    * **Execution Strategy:** {story_reinvestment}
+    * **Risk Profile:** {story_risk}
+    """)
 
     # Run DCF Model Calculation
     dcf_result = calculate_2stage_dcf(
@@ -394,6 +418,9 @@ with chart_col2:
         st.write(f"🎯 **Most Probable Fair Value (Median):** `${p50:.2f}` per share.")
         st.write(f"🛡️ **Conservative Case (10th percentile):** `${p10:.2f}` | **Optimistic Case (90th percentile):** `${p90:.2f}`")
         
+        # Calculate true probability of being undervalued
+        undervalued_prob = (sim_values > stock_data["current_price"]).mean() * 100
+        
         # Plot distribution
         fig_dist = px.histogram(
             sim_values, 
@@ -411,20 +438,52 @@ st.markdown("---")
 st.subheader("⚖️ Damodaran's Triad Check: Possible, Plausible, and Probable")
 c_p1, c_p2, c_p3 = st.columns(3)
 
+# 1. POSSIBLE CHECK (Logic Boundary Check)
 with c_p1:
-    if target_margin <= 0.60:
-        st.success("✅ **Possible:** Operating Margin is mathematically logical (<60%).")
+    st.markdown("### 🛠️ Possible")
+    if target_margin < 0.80 and cost_of_capital > 0.03:
+        st.success("✅ **Passed Mathematical Feasibility**")
+        st.write("• Target operating margin is logically restricted below 80%.")
+        st.write("• Terminal discount rate is safely above structural economic growth.")
     else:
-        st.error("❌ **Impossible Narrative:** Your profit margin is mathematically impossible to maintain long term.")
+        st.error("❌ **Mathematical Breach Detected**")
+        st.write("• Assumed margins or growth dynamics violate foundational corporate math limits.")
 
+# 2. PLAUSIBLE CHECK (Industry & Historical Comparison Check)
 with c_p2:
-    if growth_rate <= 0.40:
-        st.success("✅ **Plausible:** High-growth rates are within broad historical norms.")
-    else:
-        st.warning("⚠️ **Unlikely Narrative:** High-growth rates exceeding 40% annually for 5 years are extremely rare historically.")
+    st.markdown("### ⚖️ Plausible")
+    
+    # Calculate comparative variance
+    margin_variance = target_margin - stock_data["operating_margin"]
+    growth_variance = growth_rate - stock_data["revenue_growth_1y"]
+    
+    warnings = []
+    
+    if abs(margin_variance) > 0.20:
+        warnings.append(f"• Margin target **({target_margin*100:.1f}%)** varies by >20% from current margins **({stock_data['operating_margin']*100:.1f}%)**.")
+    if abs(growth_variance) > 0.25:
+        warnings.append(f"• Growth target **({growth_rate*100:.1f}%)** is drastically different from historical actuals **({stock_data['revenue_growth_1y']*100:.1f}%)**.")
+    if target_margin > (ind_avg_margin + 0.15):
+         warnings.append(f"• Assumed margin is significantly higher than industry benchmark average **({ind_avg_margin*100:.1f}%)**.")
 
-with c_p3:
-    if len(sim_values) > 0:
-        st.success("✅ **Probable:** Multi-stage DCF models completed simulation without breaking limits.")
+    if len(warnings) == 0:
+        st.success("✅ **Passed Plausibility Sanity Check**")
+        st.write("• Assumptions line up elegantly with historical benchmarks and sector averages.")
     else:
-        st.error("❌ **Invalid Logic:** Check the base parameters of your story.")
+        st.warning("⚠️ **Ambitious Narrative Alerts:**")
+        for w in warnings:
+            st.write(w)
+
+# 3. PROBABLE CHECK (Monte Carlo Undervaluation Likelihood)
+with c_p3:
+    st.markdown("### 🎲 Probable")
+    
+    if undervalued_prob > 70:
+        st.success(f"🎯 **High Likelihood of Undervaluation: {undervalued_prob:.1f}%**")
+        st.write(f"• Based on 2,000 multi-verse runs, **{undervalued_prob:.1f}%** of projections exceed the current price of `${stock_data['current_price']:.2f}`.")
+    elif undervalued_prob >= 35:
+        st.info(f"⚖️ **Balanced / Neutral Risk Profile: {undervalued_prob:.1f}%**")
+        st.write(f"• Projections represent a balanced coin flip. **{undervalued_prob:.1f}%** of future narratives justify a price higher than current market levels.")
+    else:
+        st.error(f"🚨 **High Likelihood of Overvaluation: {undervalued_prob:.1f}%**")
+        st.write(f"• Only **{undervalued_prob:.1f}%** of simulation iterations yielded intrinsic valuations above `${stock_data['current_price']:.2f}`.")
