@@ -351,7 +351,7 @@ with chart_col1:
         connector={"line": {"color": "rgb(63, 63, 63)"}},
     ))
     
-    fig_waterfall.update_layout(title="Valuation Waterfall Analysis", ylabel="$ Billions", showlegend=False)
+    fig_waterfall.update_layout(title="Valuation Waterfall Analysis", yaxis_title="$ Billions", showlegend=False)
     st.plotly_chart(fig_waterfall, use_container_width=True)
 
 with chart_col2:
