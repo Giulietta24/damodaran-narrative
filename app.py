@@ -132,7 +132,9 @@ def fetch_stock_data(ticker_symbol):
     }
 
     if ticker_symbol in profiles:
-        return profiles[ticker_symbol], True
+        profile_data = profiles[ticker_symbol].copy()
+        profile_data["ticker"] = ticker_symbol
+        return profile_data, True
 
     # Multi-layer parsing from live Yahoo Finance
     try:
