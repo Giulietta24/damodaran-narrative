@@ -91,57 +91,57 @@ def load_damodaran_industry_data():
             "PreTaxOpMargin": [0.3321, 0.3531, 0.2249, 0.2954, 0.2582, 0.1250, 0.0850, 0.0720],
         })
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)  # Lower TTL to 60 seconds to ensure live price quotes are fresh on reload
 def fetch_stock_data(ticker_symbol):
     """
     Fetches corporate financial metrics with robust multi-layer parsing.
-    Includes comprehensive manual fallbacks for rate-limited, missing, or volatile tickers.
+    Always attempts a live real-time price fetch first, merging with known templates for stability.
     """
     ticker_symbol = ticker_symbol.upper().strip()
     
-    # Pre-loaded corporate profiles to guarantee instant high-fidelity valuation runs
+    # Pre-loaded baseline structures to guarantee logical structural components
     profiles = {
         "AAPL": {
             "company_name": "Apple Inc.", "sector": "Technology", "industry": "Technology Hardware",
             "revenue_ttm": 391_000_000_000, "operating_margin": 0.307, "net_margin": 0.263,
-            "debt_to_equity": 1.45, "current_price": 180.0, "market_cap": 2_800_000_000_000,
-            "shares_outstanding": 15_400_000_000, "cash": 73_000_000_000, "total_debt": 108_000_000_000,
+            "debt_to_equity": 1.45, "current_price": 300.0, "market_cap": 4_400_000_000_000,
+            "shares_outstanding": 14_690_000_000, "cash": 73_000_000_000, "total_debt": 108_000_000_000,
             "revenue_growth_1y": 0.02, "non_operating_assets": 158_000_000_000
         },
         "TSLA": {
             "company_name": "Tesla Inc.", "sector": "Automotive", "industry": "Automotive",
             "revenue_ttm": 96_000_000_000, "operating_margin": 0.092, "net_margin": 0.081,
-            "debt_to_equity": 0.10, "current_price": 175.0, "market_cap": 550_000_000_000,
+            "debt_to_equity": 0.10, "current_price": 408.0, "market_cap": 1_300_000_000_000,
             "shares_outstanding": 3_180_000_000, "cash": 26_800_000_000, "total_debt": 9_500_000_000,
             "revenue_growth_1y": 0.18, "non_operating_assets": 5_400_000_000
         },
         "MSTR": {
             "company_name": "MicroStrategy Inc.", "sector": "Technology", "industry": "Software (System & Application)",
             "revenue_ttm": 496_000_000, "operating_margin": 0.10, "net_margin": 0.05,
-            "debt_to_equity": 3.2, "current_price": 1200.0, "market_cap": 20_000_000_000,
-            "shares_outstanding": 17_700_000, "cash": 50_000_000, "total_debt": 2_200_000_000,
+            "debt_to_equity": 3.2, "current_price": 112.50, "market_cap": 40_000_000_000,
+            "shares_outstanding": 356_000_000, "cash": 50_000_000, "total_debt": 2_200_000_000,
             "revenue_growth_1y": -0.02, "non_operating_assets": 16_000_000_000  # Strategic Bitcoin Assets Value
         },
         "NVDA": {
             "company_name": "NVIDIA Corp.", "sector": "Technology", "industry": "Semiconductor",
             "revenue_ttm": 96_000_000_000, "operating_margin": 0.62, "net_margin": 0.55,
-            "debt_to_equity": 0.20, "current_price": 900.0, "market_cap": 2_200_000_000_000,
-            "shares_outstanding": 2_450_000_000, "cash": 25_000_000_000, "total_debt": 11_000_000_000,
+            "debt_to_equity": 0.20, "current_price": 210.0, "market_cap": 5_070_000_000_000,
+            "shares_outstanding": 24_500_000_000, "cash": 25_000_000_000, "total_debt": 11_000_000_000,
             "revenue_growth_1y": 1.25, "non_operating_assets": 15_000_000_000
         }
     }
 
-    if ticker_symbol in profiles:
-        profile_data = profiles[ticker_symbol].copy()
-        profile_data["ticker"] = ticker_symbol
-        return profile_data, True
-
-    # Multi-layer parsing from live Yahoo Finance
+    # Attempt dynamic, live retrieval first
     try:
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.info or {}
-        if not info or "longName" not in info:
-            raise ValueError("No data returned from API")
+        if not info or ("longName" not in info and "shortName" not in info and "currentPrice" not in info and "regularMarketPrice" not in info):
+            raise ValueError("No dynamic info fields found")
+
+        # Prioritize live price quotes from API
+        live_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+        if live_price is None:
+            raise ValueError("No live price quote available")
 
         shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding") or 1.0
         cash = info.get("totalCash") or info.get("freeCashflow") or 0.0
@@ -155,14 +155,13 @@ def fetch_stock_data(ticker_symbol):
                 rev_growth = float(val)
                 break
 
-        # Attempt to pull financials for robust Y-o-Y historical calculation
+        # Attempt to pull financials for dynamic Y-o-Y historical calculation
         try:
             fin = ticker.financials
             if fin is not None and not fin.empty:
-                # Search dynamically across statement labels
                 rev_rows = [idx for idx in fin.index if any(x in str(idx).lower() for x in ["revenue", "total revenue", "sales", "turnover"])]
                 if rev_rows:
-                    rev_series = fin.loc[rev_rows[0]].dropna()
+                    rev_series = fin.loc[rev_row[0]].dropna()
                     if len(rev_series) >= 2:
                         val_series = rev_series.values
                         calc_growth = (val_series[0] - val_series[1]) / val_series[1] if val_series[1] != 0 else 0.10
@@ -171,7 +170,7 @@ def fetch_stock_data(ticker_symbol):
         except Exception:
             pass
 
-        # Parse Non-operating strategic treasury assets
+        # Parse Non-operating strategic assets (like Bitcoin on balance sheets)
         non_op = 0.0
         try:
             balance = ticker.balance_sheet
@@ -184,26 +183,38 @@ def fetch_stock_data(ticker_symbol):
         except Exception:
             pass
 
+        # Pull baseline profile properties if this is one of our template tickers
+        profile_base = profiles.get(ticker_symbol, {})
+
         data = {
             "ticker": ticker_symbol,
-            "company_name": info.get("longName", info.get("shortName", "Generic Corp")),
-            "sector": info.get("sector", "Other"),
-            "industry": info.get("industry", "Other"),
-            "revenue_ttm": info.get("totalRevenue") or info.get("trailingRevenue") or 1_000_000_000,
-            "operating_margin": info.get("operatingMargins") or 0.12,
-            "net_margin": info.get("profitMargins") or 0.08,
-            "debt_to_equity": (info.get("debtToEquity") or 50.0) / 100.0,
-            "current_price": info.get("currentPrice") or info.get("regularMarketPrice") or 100.0,
-            "market_cap": info.get("marketCap") or (shares * (info.get("currentPrice") or 1.0)),
-            "shares_outstanding": shares,
-            "cash": cash,
-            "total_debt": debt,
-            "revenue_growth_1y": rev_growth,
-            "non_operating_assets": non_op
+            "company_name": info.get("longName", info.get("shortName", profile_base.get("company_name", f"{ticker_symbol} Corp"))),
+            "sector": info.get("sector", profile_base.get("sector", "Other")),
+            "industry": info.get("industry", profile_base.get("industry", "Other")),
+            "revenue_ttm": info.get("totalRevenue") or info.get("trailingRevenue") or profile_base.get("revenue_ttm", 1_000_000_000),
+            "operating_margin": info.get("operatingMargins") if info.get("operatingMargins") is not None else profile_base.get("operating_margin", 0.12),
+            "net_margin": info.get("profitMargins") if info.get("profitMargins") is not None else profile_base.get("net_margin", 0.08),
+            "debt_to_equity": (info.get("debtToEquity") or 50.0) / 100.0 if info.get("debtToEquity") is not None else profile_base.get("debt_to_equity", 0.5),
+            "current_price": float(live_price),
+            "market_cap": info.get("marketCap") or (shares * live_price),
+            "shares_outstanding": shares if shares > 1.0 else profile_base.get("shares_outstanding", 10_000_000),
+            "cash": cash if cash > 0.0 else profile_base.get("cash", 0.0),
+            "total_debt": debt if debt > 0.0 else profile_base.get("total_debt", 0.0),
+            "revenue_growth_1y": rev_growth if rev_growth != 0.10 else profile_base.get("revenue_growth_1y", 0.10),
+            "non_operating_assets": non_op if non_op > 0.0 else profile_base.get("non_operating_assets", 0.0)
         }
         return data, True
+
     except Exception:
-        # Safe default generic fallbacks for user custom ticker entries
+        # Fallback to local profile structure if API is completely unavailable or rate-limited
+        if ticker_symbol in profiles:
+            profile_data = profiles[ticker_symbol].copy()
+            profile_data["ticker"] = ticker_symbol
+            # Calculate market cap using pre-loaded split-adjusted pricing template
+            profile_data["market_cap"] = profile_data["shares_outstanding"] * profile_data["current_price"]
+            return profile_data, True
+
+        # Custom generic corporate baseline for user custom ticker entries
         fallback_data = {
             "ticker": ticker_symbol,
             "company_name": f"{ticker_symbol} Enterprise",
@@ -547,24 +558,24 @@ growth_rate = st.sidebar.slider(
     "High Growth Rate (Yr 1-5)", 
     0.0, 0.80, float(calc_growth), 0.01, 
     format="%.0f%%", 
-    key=f"g_{slider_key}"
+    key=f"growth_s_{slider_reset_key}" if 'slider_reset_key' in locals() else f"growth_s_{slider_reset_key}"
 )
 target_margin = st.sidebar.slider(
     "Target Operating Margin (Yr 5)", 
     -0.10, 0.60, float(calc_margin), 0.01, 
     format="%.0f%%", 
-    key=f"m_{slider_key}"
+    key=f"margin_s_{slider_reset_key}" if 'slider_reset_key' in locals() else f"margin_s_{ticker_input}"
 )
 sales_to_cap = st.sidebar.slider(
     "Capital Efficiency (Sales-to-Capital)", 
     0.1, 5.0, float(calc_sc), 0.1, 
-    key=f"sc_{slider_key}"
+    key=f"cap_s_{slider_reset_key}" if 'slider_reset_key' in locals() else f"cap_s_{ticker_input}"
 )
 cost_of_capital = st.sidebar.slider(
     "Cost of Capital (WACC)", 
     0.04, 0.20, float(calc_wacc), 0.005, 
     format="%.1f%%", 
-    key=f"wacc_{slider_key}"
+    key=f"wacc_s_{slider_reset_key}" if 'slider_reset_key' in locals() else f"wacc_s_{ticker_input}"
 )
 
 st.sidebar.markdown("---")
