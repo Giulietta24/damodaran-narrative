@@ -69,6 +69,20 @@ def fetch_stock_data(ticker_symbol):
         if raw_operating_margin is None:
             raw_operating_margin = 0.10
             
+        # Fetch balance sheet assets to identify substantial non-operating assets (e.g. MSTR's Bitcoin)
+        non_op_assets = 0.0
+        try:
+            balance = ticker.balance_sheet
+            if balance is not None and not balance.empty:
+                # Sum up key investment / asset columns that hold non-operating holdings
+                for col in ["Long Term Investments", "Other Long Term Assets", "Other Current Assets"]:
+                    if col in balance.index:
+                        val_series = balance.loc[col].dropna()
+                        if not val_series.empty:
+                            non_op_assets = max(non_op_assets, float(val_series.values[0]))
+        except Exception:
+            pass
+            
         data = {
             "ticker": ticker_symbol.upper(),
             "company_name": info.get("longName", info.get("shortName", "Unknown Company")),
@@ -83,6 +97,7 @@ def fetch_stock_data(ticker_symbol):
             "shares_outstanding": shares,
             "cash": cash,
             "total_debt": total_debt,
+            "non_operating_assets": non_op_assets,
         }
 
         # Calculate revenue growth safely
@@ -263,7 +278,8 @@ if not success:
         "shares_outstanding": 100_000_000,
         "cash": 1_500_000_000,
         "total_debt": 500_000_000,
-        "revenue_growth_1y": 0.18
+        "revenue_growth_1y": 0.18,
+        "non_operating_assets": 0.0,
     }
 
 # Find industry benchmark stats if possible
@@ -366,8 +382,23 @@ base_wacc = 0.08 + (stock_data["debt_to_equity"] * 0.005)
 calc_wacc = base_wacc + 0.03 if "High Risk" in story_risk else base_wacc if "Average" in story_risk else base_wacc - 0.015
 calc_wacc = max(0.04, min(0.18, calc_wacc))
 
+# --- STEP 3: STRATEGIC / NON-OPERATING ASSET ENGINE ---
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔢 Step 2: Fine-Tune the Valuation Drivers")
+st.sidebar.markdown("### 🪙 Step 3: Strategic Holdings & Treasuries")
+
+# Gather balance-sheet values for MSTR Bitcoin holdings (long term investments)
+fetched_non_op_value = float(stock_data.get("non_operating_assets", 0.0)) / 1e9
+
+# Allow the user to fine-tune strategic treasury values (e.g. Bitcoin, Alibaba holdings, venture stakes)
+strategic_treasury = st.sidebar.slider(
+    "Holdings / Non-Op Assets Value ($B)",
+    0.0, max(100.0, fetched_non_op_value * 2.0 + 15.0), float(fetched_non_op_value), 0.1,
+    help="Add key non-operating holdings to firms (such as MicroStrategy's Bitcoin assets, or Yahoo's historic Alibaba equity portfolio)."
+)
+non_operating_assets_bytes = strategic_treasury * 1e9
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔢 Step 4: Fine-Tune the Valuation Drivers")
 
 # Streamlit Lock Workaround: Unique key incorporating narrative state and ticker forces dynamic reset
 slider_reset_key = f"{story_tam}_{story_moat}_{story_reinvestment}_{story_risk}_{stock_data['ticker']}"
@@ -449,7 +480,9 @@ with col_left:
     # Convert operating asset value to Equity Value and share price
     operating_value = dcf_result["operating_value"]
     net_debt = stock_data["total_debt"] - stock_data["cash"]
-    equity_value = operating_value - net_debt
+    
+    # Damodaran Bridge: Equity Value = Operating Assets - Net Debt + Strategic Treasuries (Holdings)
+    equity_value = operating_value - net_debt + non_operating_assets_bytes
     intrinsic_value_per_share = max(0.0, equity_value / stock_data["shares_outstanding"])
 
     # Output valuation indicators
@@ -465,7 +498,7 @@ with col_left:
     with v2:
         st.metric(
             label="Implied Corporate Value (Firm)",
-            value=f"${operating_value/1e9:.2f}B"
+            value=f"${(operating_value + non_operating_assets_bytes)/1e9:.2f}B"
         )
 
 with col_right:
@@ -499,10 +532,17 @@ with chart_col1:
     fig_waterfall = go.Figure(go.Waterfall(
         name="Value Bridge", 
         orientation="v",
-        measure=["relative", "relative", "total", "relative", "total"],
-        x=["PV of 5Yr FCFF", "PV of Terminal Value", "Operating Assets", "Less Net Debt", "Common Equity Value"],
-        text=[f"${cumulative_pvs/1e9:.1f}B", f"${pv_tv/1e9:.1f}B", f"${operating_value/1e9:.1f}B", f"${-net_debt/1e9:.1f}B", f"${equity_value/1e9:.1f}B"],
-        y=[cumulative_pvs/1e9, pv_tv/1e9, 0, -net_debt/1e9, 0],
+        measure=["relative", "relative", "total", "relative", "relative", "total"],
+        x=["PV of 5Yr FCFF", "PV of Terminal Value", "Operating Assets", "Non-Operating Assets", "Less Net Debt", "Common Equity Value"],
+        text=[
+            f"${cumulative_pvs/1e9:.2f}B", 
+            f"${pv_tv/1e9:.2f}B", 
+            f"${operating_value/1e9:.2f}B", 
+            f"${non_operating_assets_bytes/1e9:.2f}B", 
+            f"${-net_debt/1e9:.2f}B", 
+            f"${equity_value/1e9:.2f}B"
+        ],
+        y=[cumulative_pvs/1e9, pv_tv/1e9, 0, non_operating_assets_bytes/1e9, -net_debt/1e9, 0],
         connector={"line": {"color": "rgb(63, 63, 63)"}},
     ))
     
@@ -538,8 +578,8 @@ with chart_col2:
                 sc_ratio=sales_to_cap,
                 wacc_high=w
             )
-            # Calculate intrinsic equity price
-            sim_price = (val - net_debt) / stock_data["shares_outstanding"]
+            # Calculate intrinsic equity price incorporating Non-Operating Asset Treasury
+            sim_price = (val - net_debt + non_operating_assets_bytes) / stock_data["shares_outstanding"]
             sim_values.append(max(0.0, sim_price))
 
         sim_values = np.array(sim_values)
