@@ -16,7 +16,7 @@ st.markdown("""
     .reportview-container { background: #f8f9fa; }
     .metric-card {
         background-color: white;
-        padding: 24px;
+        padding: 22px;
         border-radius: 12px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.03);
         border: 1px solid #eef2f6;
@@ -37,7 +37,7 @@ st.markdown("""
         background-color: #fef3c7;
         border-left: 4px solid #d97706;
         color: #92400e;
-        padding: 16px;
+        padding: 14px 16px;
         border-radius: 8px;
         margin: 12px 0;
     }
@@ -45,7 +45,7 @@ st.markdown("""
         background-color: #f0fdf4;
         border-left: 4px solid #16a34a;
         color: #166534;
-        padding: 16px;
+        padding: 14px 16px;
         border-radius: 8px;
         margin: 12px 0;
     }
@@ -53,17 +53,21 @@ st.markdown("""
         background-color: #f0f9ff;
         border-left: 4px solid #0284c7;
         color: #075985;
-        padding: 16px;
+        padding: 14px 16px;
         border-radius: 8px;
         margin: 12px 0;
     }
-    .consistency-score {
+    .score-card {
         text-align: center;
         background: linear-gradient(135deg, #1e293b, #0f172a);
         color: white;
-        padding: 24px;
+        padding: 22px;
         border-radius: 12px;
         box-shadow: 0 4px 20px rgba(15,23,42,0.15);
+    }
+    .small-note {
+        font-size: 12px;
+        color: #64748b;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -187,8 +191,9 @@ def fetch_stock_data(ticker_symbol):
         debt = info.get("totalDebt") or 0.0
 
         rev_growth = None
-        if isinstance(info.get("revenueGrowth"), (int, float)) and -0.9 < info["revenueGrowth"] < 5.0:
-            rev_growth = float(info["revenueGrowth"])
+        rg = info.get("revenueGrowth")
+        if isinstance(rg, (int, float)) and -0.9 < rg < 5.0:
+            rev_growth = float(rg)
 
         historical_growth = None
         try:
@@ -421,7 +426,7 @@ def run_vectorized_monte_carlo(rev_0, margin_0, target_margin_base, growth_base,
 
     operating_value = sum_pv_fcff + pv_terminal
     equity_value = operating_value - net_debt + non_op
-    sim_prices = np.maximum(0.0, equity_value / shares)
+    sim_prices = np.maximum(0.0, equity_value / max(shares, 1))
 
     return sim_prices
 
@@ -431,41 +436,46 @@ def calculate_story_consistency(story_tam, story_moat, story_reinvestment, story
 
     if "Disruptor" in story_tam and sales_to_cap < 1.0:
         score -= 20
-        critiques.append("⚠️ High-growth story but weak capital efficiency.")
+        critiques.append("High-growth story but weak capital efficiency.")
 
     if "Monopoly" in story_moat and target_margin < 0.15:
         score -= 15
-        critiques.append("⚠️ Strong moat claim but modest margin target.")
+        critiques.append("Strong moat claim but modest margin target.")
     elif "Commodity" in story_moat and target_margin > 0.18:
         score -= 20
-        critiques.append("⚠️ Commodity business but high margin assumption.")
+        critiques.append("Commodity business but high margin assumption.")
 
     if "High Risk" in story_risk and cost_of_capital < 0.08:
         score -= 15
-        critiques.append("⚠️ High-risk story but low WACC.")
+        critiques.append("High-risk story but low WACC.")
     elif "Low Risk" in story_risk and cost_of_capital > 0.12:
         score -= 10
-        critiques.append("⚠️ Low-risk story but high WACC.")
+        critiques.append("Low-risk story but high WACC.")
 
     if "Asset-Light" in story_reinvestment and sales_to_cap < 1.2:
         score -= 15
-        critiques.append("⚠️ Asset-light story but low capital efficiency.")
+        critiques.append("Asset-light story but low capital efficiency.")
 
     score = max(10, score)
     return score, critiques
 
+def confidence_label(source, consistency_score):
+    if source == "live" and consistency_score >= 80:
+        return "High confidence"
+    if source in ("live", "fallback") and consistency_score >= 60:
+        return "Medium confidence"
+    return "Low confidence"
+
 st.title("📊 Aswath Damodaran Narrative Valuation Studio")
-st.caption("Valuation is a bridge between narrative and numbers.")
+st.caption("Valuation is a bridge between narrative and numbers. The app shows the story, the support behind it, and the implied value.")
 
 st.sidebar.markdown("### 🔍 Live Data Sourcing")
 ticker_input = st.sidebar.text_input("Enter Company Ticker", value="MSTR").strip().upper()
 
 stock_data, api_success = fetch_stock_data(ticker_input)
-if not api_success:
-    st.sidebar.warning(f"Using fallback data for '{ticker_input}'.")
-
 damodaran_df = load_damodaran_industry_data()
-industry_match = damodaran_df[damodaran_df["Industry"].astype(str).str.contains(stock_data["industry"], case=False, na=False, regex=False)]
+
+industry_match = damodaran_df[damodaran_df["Industry"].astype(str).str.contains(str(stock_data["industry"]), case=False, na=False, regex=False)]
 if not industry_match.empty:
     ind_avg_margin = float(industry_match["PreTaxOpMargin"].iloc[0])
     ind_avg_ps = float(industry_match["PriceSales"].iloc[0])
@@ -547,36 +557,14 @@ calc_wacc = base_wacc + 0.03 if "High Risk" in story_risk else base_wacc if "Ave
 calc_wacc = max(0.04, min(0.18, calc_wacc))
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🪙 Step 2: Fine-Tune the Drivers")
+st.sidebar.markdown("### 🔢 Step 2: Fine-Tune the Drivers")
 
 slider_key = f"{story_tam}_{story_moat}_{story_reinvestment}_{story_risk}_{stock_data['ticker']}"
 
-growth_rate = st.sidebar.slider(
-    "High Growth Rate (Yr 1-5)",
-    0.0, 0.80, float(calc_growth), 0.01,
-    format="%.0f%%",
-    key=f"growth_s_{slider_key}"
-)
-
-target_margin = st.sidebar.slider(
-    "Target Operating Margin (Yr 5)",
-    -0.10, 0.60, float(calc_margin), 0.01,
-    format="%.0f%%",
-    key=f"margin_s_{slider_key}"
-)
-
-sales_to_cap = st.sidebar.slider(
-    "Capital Efficiency (Sales-to-Capital)",
-    0.1, 5.0, float(calc_sc), 0.1,
-    key=f"cap_s_{slider_key}"
-)
-
-cost_of_capital = st.sidebar.slider(
-    "Cost of Capital (WACC)",
-    0.04, 0.20, float(calc_wacc), 0.005,
-    format="%.1f%%",
-    key=f"wacc_s_{slider_key}"
-)
+growth_rate = st.sidebar.slider("High Growth Rate (Yr 1-5)", 0.0, 0.80, float(calc_growth), 0.01, format="%.0f%%", key=f"growth_s_{slider_key}")
+target_margin = st.sidebar.slider("Target Operating Margin (Yr 5)", -0.10, 0.60, float(calc_margin), 0.01, format="%.0f%%", key=f"margin_s_{slider_key}")
+sales_to_cap = st.sidebar.slider("Capital Efficiency (Sales-to-Capital)", 0.1, 5.0, float(calc_sc), 0.1, key=f"cap_s_{slider_key}")
+cost_of_capital = st.sidebar.slider("Cost of Capital (WACC)", 0.04, 0.20, float(calc_wacc), 0.005, format="%.1f%%", key=f"wacc_s_{slider_key}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🪙 Step 3: Non-Operating Strategic Holdings")
@@ -595,35 +583,19 @@ non_operating_assets_bytes = strategic_treasury * 1e9
 st.header(f"🏢 {stock_data['company_name']} ({stock_data['ticker']})")
 st.caption(f"Sector: {stock_data['sector']} | Industry: {stock_data['industry']} | Data source: {stock_data.get('data_source', 'live')}")
 
+confidence = confidence_label(stock_data.get("data_source", "demo"), 0)
+
 m1, m2, m3, m4 = st.columns(4)
 with m1:
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-title'>Current Price</div>
-        <div class='metric-value'>${stock_data['current_price']:.2f}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class='metric-card'><div class='metric-title'>Current Price</div><div class='metric-value'>${stock_data['current_price']:.2f}</div></div>""", unsafe_allow_html=True)
 with m2:
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-title'>TTM Revenue</div>
-        <div class='metric-value'>${stock_data['revenue_ttm']/1e9:.2f}B</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class='metric-card'><div class='metric-title'>TTM Revenue</div><div class='metric-value'>${stock_data['revenue_ttm']/1e9:.2f}B</div></div>""", unsafe_allow_html=True)
 with m3:
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-title'>Actual Margin</div>
-        <div class='metric-value'>{stock_data['operating_margin']*100:.1f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class='metric-card'><div class='metric-title'>Actual Margin</div><div class='metric-value'>{stock_data['operating_margin']*100:.1f}%</div></div>""", unsafe_allow_html=True)
 with m4:
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-title'>Historical Growth</div>
-        <div class='metric-value'>{stock_data['revenue_growth_1y']*100:.1f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class='metric-card'><div class='metric-title'>Historical Growth</div><div class='metric-value'>{stock_data['revenue_growth_1y']*100:.1f}%</div></div>""", unsafe_allow_html=True)
+
+st.markdown(f"<div class='small-note'>Model confidence: <strong>{confidence}</strong>. Live data is stronger than fallback data, but all DCF outputs remain assumption-sensitive.</div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -649,6 +621,7 @@ consistency_score, critiques = calculate_story_consistency(
     growth_rate, target_margin, sales_to_cap, cost_of_capital
 )
 
+confidence = confidence_label(stock_data.get("data_source", "demo"), consistency_score)
 margin_variance = abs(target_margin - stock_data["operating_margin"])
 growth_variance = abs(growth_rate - stock_data["revenue_growth_1y"])
 alignment_index = max(10, 100 - int((margin_variance * 150) + (growth_variance * 150)))
@@ -660,7 +633,7 @@ with col_left:
     c_score_col, c_align_col = st.columns(2)
     with c_score_col:
         st.markdown(f"""
-        <div class='consistency-score'>
+        <div class='score-card'>
             <div style='font-size: 11px; text-transform: uppercase; opacity: 0.8;'>Story Coherence Index</div>
             <div style='font-size: 42px; font-weight: 800; color: #38bdf8;'>{consistency_score}%</div>
             <div style='font-size: 11px; opacity: 0.8; margin-top: 4px;'>Narrative logical consistency</div>
@@ -668,20 +641,24 @@ with col_left:
         """, unsafe_allow_html=True)
     with c_align_col:
         st.markdown(f"""
-        <div class='consistency-score' style='background: linear-gradient(135deg, #334155, #1e293b);'>
+        <div class='score-card' style='background: linear-gradient(135deg, #334155, #1e293b);'>
             <div style='font-size: 11px; text-transform: uppercase; opacity: 0.8;'>Assumption Alignment Index</div>
             <div style='font-size: 42px; font-weight: 800; color: #34d399;'>{alignment_index}%</div>
             <div style='font-size: 11px; opacity: 0.8; margin-top: 4px;'>Proximity to current fundamentals</div>
         </div>
         """, unsafe_allow_html=True)
 
-    st.write("")
+    st.markdown(f"<div class='small-note'>Confidence: <strong>{confidence}</strong>.</div>", unsafe_allow_html=True)
 
-    if consistency_score == 100:
-        st.markdown("<div class='success-box'>✅ **Flawless Narrative Cohesion:** All qualitative business parameters align tightly with the model inputs.</div>", unsafe_allow_html=True)
+    if consistency_score >= 85:
+        st.markdown("<div class='success-box'>✅ Strong narrative support. The selected story is broadly consistent with the numbers.</div>", unsafe_allow_html=True)
+    elif consistency_score >= 60:
+        st.markdown("<div class='info-box'>ℹ️ Mixed support. The story mostly works, but one or two assumptions deserve caution.</div>", unsafe_allow_html=True)
     else:
-        for critique in critiques:
-            st.markdown(f"<div class='warning-box'>{critique}</div>", unsafe_allow_html=True)
+        st.markdown("<div class='warning-box'>⚠️ Weak support. The story and the numbers are pulling in different directions.</div>", unsafe_allow_html=True)
+
+    for critique in critiques:
+        st.markdown(f"<div class='warning-box'>{critique}</div>", unsafe_allow_html=True)
 
     st.markdown("### 📊 Story vs. Implied Financial Inputs")
     comparison_df = pd.DataFrame({
@@ -788,6 +765,7 @@ with chart_col1:
     ))
     fig_waterfall.update_layout(showlegend=False, yaxis_title="$ Billions")
     st.plotly_chart(fig_waterfall, use_container_width=True)
+    st.caption("This bridge shows how the story becomes operating value, then equity value.")
 
 with chart_col2:
     st.subheader("🎲 Probable Value (Instant Monte Carlo)")
@@ -821,6 +799,7 @@ with chart_col2:
         )
         fig_dist.update_layout(showlegend=False)
         st.plotly_chart(fig_dist, use_container_width=True)
+        st.caption("This distribution shows the range of likely values if the story changes a little.")
     else:
         undervalued_prob = 0
         st.warning("Monte Carlo simulation could not produce valid outputs.")
