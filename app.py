@@ -161,7 +161,7 @@ def fetch_stock_data(ticker_symbol):
             if fin is not None and not fin.empty:
                 rev_rows = [idx for idx in fin.index if any(x in str(idx).lower() for x in ["revenue", "total revenue", "sales", "turnover"])]
                 if rev_rows:
-                    rev_series = fin.loc[rev_row[0]].dropna()
+                    rev_series = fin.loc[rev_rows[0]].dropna()
                     if len(rev_series) >= 2:
                         val_series = rev_series.values
                         calc_growth = (val_series[0] - val_series[1]) / val_series[1] if val_series[1] != 0 else 0.10
@@ -452,9 +452,6 @@ def calculate_story_consistency(story_tam, story_moat, story_reinvestment, story
     score = max(10, score)
     return score, critiques
 
-st.title("📊 Aswath Damodaran Narrative Valuation Studio")
-st.caption("“Valuation is a bridge between narrative and numbers. If you have numbers without a narrative, you have no soul. If you have a narrative without numbers, you have a fairy tale.” — Prof. Aswath Damodaran")
-
 st.sidebar.markdown("### 🔍 Live Data Sourcing")
 ticker_input = st.sidebar.text_input("Enter Company Ticker", value="MSTR").strip().upper()
 
@@ -551,7 +548,7 @@ calc_wacc = max(0.04, min(0.18, calc_wacc))
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔢 Step 2: Fine-Tune the Drivers")
 
-# Slider controls initialized dynamically by the story presets
+# Unique key incorporating narrative state and ticker forces dynamic reset
 slider_key = f"{story_tam}_{story_moat}_{story_reinvestment}_{story_risk}_{stock_data['ticker']}"
 
 growth_rate = st.sidebar.slider(
@@ -590,42 +587,6 @@ strategic_treasury = st.sidebar.slider(
 )
 non_operating_assets_bytes = strategic_treasury * 1e9
 
-st.header(f"🏢 {stock_data['company_name']} ({stock_data['ticker']})")
-st.caption(f"Sector: {stock_data['sector']} | Industry: {stock_data['industry']}")
-
-# Metrics Grid Layout
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-title'>Current Price</div>
-        <div class='metric-value'>${stock_data['current_price']:.2f}</div>
-    </div>
-    """, unsafe_allow_html=True)
-with m2:
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-title'>TTM Revenue</div>
-        <div class='metric-value'>${stock_data['revenue_ttm']/1e9:.2f}B</div>
-    </div>
-    """, unsafe_allow_html=True)
-with m3:
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-title'>Actual Margin</div>
-        <div class='metric-value'>{stock_data['operating_margin']*100:.1f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
-with m4:
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-title'>Historical Growth</div>
-        <div class='metric-value'>{stock_data['revenue_growth_1y']*100:.1f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-st.markdown("---")
-
 # Execute active DCF Valuation
 dcf_result = calculate_2stage_dcf(
     rev_0=stock_data["revenue_ttm"],
@@ -651,230 +612,287 @@ consistency_score, critiques = calculate_story_consistency(
     growth_rate, target_margin, sales_to_cap, cost_of_capital
 )
 
-# Calculate Assumption Alignment Index (How far assumptions are from fundamentals)
+# Calculate Assumption Alignment Index
 margin_variance = abs(target_margin - stock_data["operating_margin"])
 growth_variance = abs(growth_rate - stock_data["revenue_growth_1y"])
 alignment_index = max(10, 100 - int((margin_variance * 150) + (growth_variance * 150)))
 
-col_left, col_right = st.columns([1.1, 0.9])
+# Create Multi-Tab Layout inside the app for interactive ease of use
+tab1, tab2 = st.tabs(["📊 Interactive Valuation Studio", "📖 Explanation: Narrative vs. Numbers"])
 
-with col_left:
-    st.subheader("📖 Narrative Alignment & Story Consistency")
-    
-    # Render Coherence Score
-    c_score_col, c_align_col = st.columns(2)
-    with c_score_col:
+with tab1:
+    # Corporate Base Metrics Row
+    c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+    with c_m1:
         st.markdown(f"""
-        <div class='consistency-score'>
-            <div style='font-size: 11px; text-transform: uppercase; opacity: 0.8;'>Story Coherence Index</div>
-            <div style='font-size: 42px; font-weight: 800; color: #38bdf8;'>{consistency_score}%</div>
-            <div style='font-size: 11px; opacity: 0.8; margin-top: 4px;'>Narrative logical consistency</div>
+        <div class='metric-card'>
+            <div class='metric-title'>Current Price</div>
+            <div class='metric-value'>${stock_data['current_price']:.2f}</div>
         </div>
         """, unsafe_allow_html=True)
-    with c_align_col:
+    with c_m2:
         st.markdown(f"""
-        <div class='consistency-score' style='background: linear-gradient(135deg, #334155, #1e293b);'>
-            <div style='font-size: 11px; text-transform: uppercase; opacity: 0.8;'>Assumption Alignment Index</div>
-            <div style='font-size: 42px; font-weight: 800; color: #34d399;'>{alignment_index}%</div>
-            <div style='font-size: 11px; opacity: 0.8; margin-top: 4px;'>Proximity to current fundamentals</div>
+        <div class='metric-card'>
+            <div class='metric-title'>TTM Revenue</div>
+            <div class='metric-value'>${stock_data['revenue_ttm']/1e9:.2f}B</div>
         </div>
         """, unsafe_allow_html=True)
-
-    st.write("")
-    
-    # Consistency Feedback Loop
-    if consistency_score == 100:
-        st.markdown("<div class='success-box'>✅ **Flawless Narrative Cohesion:** All qualitative business parameters align perfectly with your implied mathematical drivers. This represents a robust scenario structure.</div>", unsafe_allow_html=True)
-    else:
-        for critique in critiques:
-            st.markdown(f"<div class='warning-box'>{critique}</div>", unsafe_allow_html=True)
-
-    st.markdown("### 📊 Story vs. Implied Financial Inputs")
-    comparison_df = pd.DataFrame({
-        "Narrative Component": ["TAM / Growth", "Moat / Pricing", "Reinvestment / CapEx", "Risk Profile"],
-        "Selected Story Option": [story_tam.split(" (")[0], story_moat.split(" (")[0], story_reinvestment.split(" (")[0], story_risk.split(" (")[0]],
-        "Implied Financial Preset": [f"{calc_growth*100:.1f}% Growth", f"{calc_margin*100:.1f}% Margin", f"{calc_sc:.1f} Sales-to-Capital", f"{calc_wacc*100:.1f}% WACC"],
-        "Your Fine-Tuned Value": [f"{growth_rate*100:.1f}% Growth", f"{target_margin*100:.1f}% Margin", f"{sales_to_cap:.1f} Sales-to-Capital", f"{cost_of_capital*100:.1f}% WACC"]
-    })
-    st.table(comparison_df)
-
-with col_right:
-    st.subheader("⚖️ Valuation Bridge & Outputs")
-    
-    # Intrinsic value delta card
-    price_pct_diff = ((intrinsic_value_per_share - stock_data['current_price']) / stock_data['current_price']) * 100
-    delta_color = "#16a34a" if price_pct_diff >= 0 else "#dc2626"
-    delta_symbol = "➕" if price_pct_diff >= 0 else "➖"
-    
-    st.markdown(f"""
-    <div style='background-color: white; padding: 24px; border-radius: 12px; border: 1px solid #eef2f6; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.02);'>
-        <div style='font-size: 14px; text-transform: uppercase; color: #64748b; font-weight: 600;'>Implied Intrinsic Value Per Share</div>
-        <div style='font-size: 48px; font-weight: 800; color: #0f172a; margin: 8px 0;'>${intrinsic_value_per_share:.2f}</div>
-        <div style='font-size: 16px; font-weight: 600; color: {delta_color};'>
-            {delta_symbol} {abs(price_pct_diff):.1f}% over / under current price of ${stock_data['current_price']:.2f}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.write("")
-
-    # Terminal Value Domination Alert Heuristic
-    if tv_contribution > 80.0:
+    with c_m3:
         st.markdown(f"""
-        <div class='warning-box'>
-            🚨 <strong>Terminal Value Domination Warning:</strong> 
-            The Present Value of the Terminal Value represents <strong>{tv_contribution:.1f}%</strong> of this firm's calculated operating assets. 
-            This high reliance suggests that minor adjustments in terminal growth or terminal cost of capital will swing the valuation violently. Valuation is highly sensitive!
+        <div class='metric-card'>
+            <div class='metric-title'>Actual Margin</div>
+            <div class='metric-value'>{stock_data['operating_margin']*100:.1f}%</div>
         </div>
         """, unsafe_allow_html=True)
-    else:
+    with c_m4:
         st.markdown(f"""
-        <div class='info-box'>
-            ℹ️ <strong>Stable Valuation Mix:</strong> 
-            Terminal Value represents <strong>{tv_contribution:.1f}%</strong> of total operating assets. 
-            This reflects a healthy balance of value from high growth stage Year 1-5 cash flows.
+        <div class='metric-card'>
+            <div class='metric-title'>Historical Growth</div>
+            <div class='metric-value'>{stock_data['revenue_growth_1y']*100:.1f}%</div>
         </div>
         """, unsafe_allow_html=True)
 
-    # Key Firm Metrics row
-    b_col1, b_col2 = st.columns(2)
-    with b_col1:
-        st.metric("Total Operating Assets", f"${operating_value/1e9:.2f}B")
-    with b_col2:
-        st.metric("Strategic Treasury Holdings", f"${non_operating_assets_bytes/1e9:.2f}B")
+    st.markdown("---")
 
-st.markdown("---")
-st.subheader("🗓️ Multi-Stage Cashflow Projection")
+    col_left, col_right = st.columns([1.1, 0.9])
 
-years_labels = [f"Year {y}" for y in dcf_result["years"]]
-projection_df = pd.DataFrame({
-    "Revenue ($B)": [v/1e9 for v in dcf_result["revenues"]],
-    "Operating Margin": [f"{m*100:.1f}%" for m in dcf_result["margins"]],
-    "Operating Profit ($B)": [e/1e9 for e in dcf_result["ebits"]],
-    "Reinvestment ($B)": [r/1e9 for r in dcf_result["reinvestments"]],
-    "FCFF ($B)": [f/1e9 for f in dcf_result["fcffs"]],
-    "PV of Cashflow ($B)": [pv/1e9 for pv in dcf_result["pvs"]]
-}, index=years_labels)
+    with col_left:
+        st.subheader("📖 Narrative Alignment & Story Consistency")
+        
+        # Render Coherence Score
+        c_score_col, c_align_col = st.columns(2)
+        with c_score_col:
+            st.markdown(f"""
+            <div class='consistency-score'>
+                <div style='font-size: 11px; text-transform: uppercase; opacity: 0.8;'>Story Coherence Index</div>
+                <div style='font-size: 42px; font-weight: 800; color: #38bdf8;'>{consistency_score}%</div>
+                <div style='font-size: 11px; opacity: 0.8; margin-top: 4px;'>Narrative logical consistency</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c_align_col:
+            st.markdown(f"""
+            <div class='consistency-score' style='background: linear-gradient(135deg, #334155, #1e293b);'>
+                <div style='font-size: 11px; text-transform: uppercase; opacity: 0.8;'>Assumption Alignment Index</div>
+                <div style='font-size: 42px; font-weight: 800; color: #34d399;'>{alignment_index}%</div>
+                <div style='font-size: 11px; opacity: 0.8; margin-top: 4px;'>Proximity to current fundamentals</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-st.dataframe(projection_df.style.format(precision=3), use_container_width=True)
+        st.write("")
+        
+        # Consistency Feedback Loop
+        if consistency_score == 100:
+            st.markdown("<div class='success-box'>✅ **Flawless Narrative Cohesion:** All qualitative business parameters align perfectly with your implied mathematical drivers. This represents a robust scenario structure.</div>", unsafe_allow_html=True)
+        else:
+            for critique in critiques:
+                st.markdown(f"<div class='warning-box'>{critique}</div>", unsafe_allow_html=True)
 
-st.markdown("---")
-chart_col1, chart_col2 = st.columns(2)
+        st.markdown("### 📊 Story vs. Implied Financial Inputs")
+        comparison_df = pd.DataFrame({
+            "Narrative Component": ["TAM / Growth", "Moat / Pricing", "Reinvestment / CapEx", "Risk Profile"],
+            "Selected Story Option": [story_tam.split(" (")[0], story_moat.split(" (")[0], story_reinvestment.split(" (")[0], story_risk.split(" (")[0]],
+            "Implied Financial Preset": [f"{calc_growth*100:.1f}% Growth", f"{calc_margin*100:.1f}% Margin", f"{calc_sc:.1f} Sales-to-Capital", f"{calc_wacc*100:.1f}% WACC"],
+            "Your Fine-Tuned Value": [f"{growth_rate*100:.1f}% Growth", f"{target_margin*100:.1f}% Margin", f"{sales_to_cap:.1f} Sales-to-Capital", f"{cost_of_capital*100:.1f}% WACC"]
+        })
+        st.table(comparison_df)
 
-with chart_col1:
-    st.subheader("📊 Intrinsic Value Bridge")
+    with col_right:
+        st.subheader("⚖️ Valuation Bridge & Outputs")
+        
+        # Intrinsic value delta card
+        price_pct_diff = ((intrinsic_value_per_share - stock_data['current_price']) / stock_data['current_price']) * 100
+        delta_color = "#16a34a" if price_pct_diff >= 0 else "#dc2626"
+        delta_symbol = "➕" if price_pct_diff >= 0 else "➖"
+        
+        st.markdown(f"""
+        <div style='background-color: white; padding: 24px; border-radius: 12px; border: 1px solid #eef2f6; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.02);'>
+            <div style='font-size: 14px; text-transform: uppercase; color: #64748b; font-weight: 600;'>Implied Intrinsic Value Per Share</div>
+            <div style='font-size: 48px; font-weight: 800; color: #0f172a; margin: 8px 0;'>${intrinsic_value_per_share:.2f}</div>
+            <div style='font-size: 16px; font-weight: 600; color: {delta_color};'>
+                {delta_symbol} {abs(price_pct_diff):.1f}% over / under current price of ${stock_data['current_price']:.2f}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.write("")
+
+        # Terminal Value Domination Alert Heuristic
+        if tv_contribution > 80.0:
+            st.markdown(f"""
+            <div class='warning-box'>
+                🚨 <strong>Terminal Value Domination Warning:</strong> 
+                The Present Value of the Terminal Value represents <strong>{tv_contribution:.1f}%</strong> of this firm's calculated operating assets. 
+                This high reliance suggests that minor adjustments in terminal growth or terminal cost of capital will swing the valuation violently. Valuation is highly sensitive!
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class='info-box'>
+                ℹ️ <strong>Stable Valuation Mix:</strong> 
+                Terminal Value represents <strong>{tv_contribution:.1f}%</strong> of total operating assets. 
+                This reflects a healthy balance of value from high growth stage Year 1-5 cash flows.
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Key Firm Metrics row
+        b_col1, b_col2 = st.columns(2)
+        with b_col1:
+            st.metric("Total Operating Assets", f"${operating_value/1e9:.2f}B")
+        with b_col2:
+            st.metric("Strategic Treasury Holdings", f"${non_operating_assets_bytes/1e9:.2f}B")
+
+    st.markdown("---")
+    st.subheader("🗓️ Multi-Stage Cashflow Projection")
+
+    projection_df = pd.DataFrame({
+        "Revenue ($B)": [v/1e9 for v in dcf_result["revenues"]],
+        "Operating Margin": [f"{m*100:.1f}%" for m in dcf_result["margins"]],
+        "Operating Profit ($B)": [e/1e9 for e in dcf_result["ebits"]],
+        "Reinvestment ($B)": [r/1e9 for r in dcf_result["reinvestments"]],
+        "FCFF ($B)": [f/1e9 for f in dcf_result["fcffs"]],
+        "PV of Cashflow ($B)": [pv/1e9 for pv in dcf_result["pvs"]]
+    }, index=years_labels)
+
+    st.dataframe(projection_df.style.format(precision=3), use_container_width=True)
+
+    st.markdown("---")
+    chart_col1, chart_col2 = st.columns(2)
+
+    with chart_col1:
+        st.subheader("📊 Intrinsic Value Bridge")
+        
+        cumulative_pvs = sum(dcf_result["pvs"])
+        pv_tv = dcf_result["pv_terminal_value"]
+        
+        fig_waterfall = go.Figure(go.Waterfall(
+            name="Value Bridge", 
+            orientation="v",
+            measure=["relative", "relative", "total", "relative", "relative", "total"],
+            x=["PV of 5Yr FCFF", "PV of Terminal Value", "Operating Assets", "Non-Operating Assets", "Less Net Debt", "Common Equity Value"],
+            text=[
+                f"${cumulative_pvs/1e9:.2f}B", 
+                f"${pv_tv/1e9:.2f}B", 
+                f"${operating_value/1e9:.2f}B", 
+                f"${non_operating_assets_bytes/1e9:.2f}B", 
+                f"${-net_debt/1e9:.2f}B", 
+                f"${equity_value/1e9:.2f}B"
+            ],
+            y=[cumulative_pvs/1e9, pv_tv/1e9, 0, non_operating_assets_bytes/1e9, -net_debt/1e9, 0],
+            connector={"line": {"color": "rgb(63, 63, 63)"}},
+        ))
+        
+        fig_waterfall.update_layout(
+            margin=dict(t=20, b=20, l=20, r=20),
+            yaxis_title="$ Billions",
+            showlegend=False,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)"
+        )
+        st.plotly_chart(fig_waterfall, use_container_width=True)
+
+    with chart_col2:
+        st.subheader("🎲 Probable Value (Instant Monte Carlo)")
+        
+        # Execute lightning-fast vectorized simulation
+        sim_prices = run_vectorized_monte_carlo(
+            rev_0=stock_data["revenue_ttm"],
+            margin_0=stock_data["operating_margin"],
+            target_margin_base=target_margin,
+            growth_base=growth_rate,
+            sc_ratio=sales_to_cap,
+            wacc_base=cost_of_capital,
+            shares=stock_data["shares_outstanding"],
+            net_debt=net_debt,
+            non_op=non_operating_assets_bytes,
+            n_sim=2000
+        )
+        
+        p10, p50, p90 = np.percentile(sim_prices, [10, 50, 90])
+        undervalued_prob = (sim_prices > stock_data["current_price"]).mean() * 100
+
+        st.markdown(f"🎯 **Median Simulated Value:** `${p50:.2f}` per share")
+        st.markdown(f"🛡️ **Conservative case (10th percentile):** `${p10:.2f}` | **Optimistic case (90th percentile):** `${p90:.2f}`")
+
+        fig_dist = px.histogram(
+            sim_prices, 
+            nbins=50, 
+            color_discrete_sequence=['#0284c7']
+        )
+        fig_dist.add_vline(x=stock_data['current_price'], line_dash="dash", line_color="red", annotation_text="Current Market Price")
+        fig_dist.update_layout(
+            margin=dict(t=20, b=20, l=20, r=20),
+            showlegend=False,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)"
+        )
+        st.plotly_chart(fig_dist, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("⚖️ Damodaran's Triad Check: Possible, Plausible, and Probable")
+    st.caption("A perfect story is worthless if it cannot pass the test of operational plausibility and economic bounds.")
+
+    t_col1, t_col2, t_col3 = st.columns(3)
+
+    with t_col1:
+        st.markdown("### 🛠️ Possible")
+        if target_margin < 0.80 and cost_of_capital > 0.035:
+            st.success("✅ **Passed Mathematical Feasibility**")
+            st.markdown("""
+            * Target operating margin restricted below 80%.
+            * Cost of capital is logically bounded above structural risk-free terminal boundaries.
+            """)
+        else:
+            st.error("❌ **Mathematical Boundary Breach**")
+            st.markdown("* Assumed margins or financing costs break base corporate finance boundary physics.")
+
+    with t_col2:
+        st.markdown("### ⚖️ Plausible")
+        warnings = []
+        if abs(growth_rate - stock_data["revenue_growth_1y"]) > 0.25:
+            warnings.append(f"• Targeted growth ({growth_rate*100:.0f}%) is far from historical actual growth ({stock_data['revenue_growth_1y']*100:.0f}%).")
+        if target_margin > (ind_avg_margin + 0.15):
+            warnings.append(f"• Targeted margin is exceptionally high compared to industry averages ({ind_avg_margin*100:.1f}%).")
+
+        if not warnings:
+            st.success("✅ **Passed Operational Plausibility**")
+            st.markdown("* Selected inputs remain within plausible industry base rates and benchmarks.")
+        else:
+            st.warning("⚠️ **Ambitious Narrative Alerts:**")
+            for w in warnings:
+                st.markdown(w)
+
+    with t_col3:
+        st.markdown("### 🎲 Probable")
+        if undervalued_prob > 75:
+            st.success(f"🎯 **High Likelihood of Undervaluation: {undervalued_prob:.1f}%**")
+            st.markdown(f"• **{undervalued_prob:.1f}%** of simulation runs exceed the current price of `${stock_data['current_price']:.2f}`.")
+        elif undervalued_prob >= 35:
+            st.info(f"⚖️ **Balanced / Fairly Valued: {undervalued_prob:.1f}%**")
+            st.markdown(f"• Projections represent a balanced scenario map. **{undervalued_prob:.1f}%** of simulations yield upside.")
+        else:
+            st.error(f"🚨 **High Likelihood of Overvaluation: {undervalued_prob:.1f}%**")
+            st.markdown(f"• Only **{undervalued_prob:.1f}%** of simulation runs yield intrinsic valuations above `${stock_data['current_price']:.2f}`.")
+
+with tab2:
+    st.header("📖 Damodaran's Narrative Valuation Theory")
+    st.write("Valuation is not a dry exercise of typing formulas. It is a creative bridge connecting storytellers with quantitative model builders.")
     
-    cumulative_pvs = sum(dcf_result["pvs"])
-    pv_tv = dcf_result["pv_terminal_value"]
+    st.markdown("""
+    ### 1. The Core Philosophy
+    Many analysts fall into two separate mental traps:
+    * **The Left-Brain Number Cruncher:** Builds flawless spreadsheets with 100 tabs of inputs but lacks any narrative context for *why* revenues or margins will change. Damodaran says this model has *no soul*.
+    * **The Right-Brain Visionary Storyteller:** Weaves romantic, grand corporate stories (e.g. *'Our market size is infinite and we have no competitors'*) without checking if the numbers are mathematically realistic. This is a *fairy tale*.
     
-    fig_waterfall = go.Figure(go.Waterfall(
-        name="Value Bridge", 
-        orientation="v",
-        measure=["relative", "relative", "total", "relative", "relative", "total"],
-        x=["PV of 5Yr FCFF", "PV of Terminal Value", "Operating Assets", "Non-Operating Assets", "Less Net Debt", "Common Equity Value"],
-        text=[
-            f"${cumulative_pvs/1e9:.2f}B", 
-            f"${pv_tv/1e9:.2f}B", 
-            f"${operating_value/1e9:.2f}B", 
-            f"${non_operating_assets_bytes/1e9:.2f}B", 
-            f"${-net_debt/1e9:.2f}B", 
-            f"${equity_value/1e9:.2f}B"
-        ],
-        y=[cumulative_pvs/1e9, pv_tv/1e9, 0, non_operating_assets_bytes/1e9, -net_debt/1e9, 0],
-        connector={"line": {"color": "rgb(63, 63, 63)"}},
-    ))
+    ### 2. The Four Valuation Drivers
+    Every corporate narrative must map explicitly into the four engine blocks of intrinsic value:
+    1. **TAM / Revenue Growth Rate:** Dictated by your story on market size, industry speed, and market share capture.
+    2. **Target Operating Margin:** Dictated by your story on the company's competitive **Moat** and pricing power (defending profit from competitor erosion).
+    3. **Capital Reinvestment Efficiency (Sales-to-Capital):** Dictated by your story on the business model. (e.g. asset-light software licensing scales much more efficiently than physical automotive factories).
+    4. **Cost of Capital (WACC):** The discount rate reflecting market risk, currency exposure, operational stability, and leverage profiles.
     
-    fig_waterfall.update_layout(
-        margin=dict(t=20, b=20, l=20, r=20),
-        yaxis_title="$ Billions",
-        showlegend=False,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)"
-    )
-    st.plotly_chart(fig_waterfall, use_container_width=True)
-
-with chart_col2:
-    st.subheader("🎲 Probable Value (Instant Monte Carlo)")
-    
-    # Execute lightning-fast vectorized simulation
-    sim_prices = run_vectorized_monte_carlo(
-        rev_0=stock_data["revenue_ttm"],
-        margin_0=stock_data["operating_margin"],
-        target_margin_base=target_margin,
-        growth_base=growth_rate,
-        sc_ratio=sales_to_cap,
-        wacc_base=cost_of_capital,
-        shares=stock_data["shares_outstanding"],
-        net_debt=net_debt,
-        non_op=non_operating_assets_bytes,
-        n_sim=2000
-    )
-    
-    p10, p50, p90 = np.percentile(sim_prices, [10, 50, 90])
-    undervalued_prob = (sim_prices > stock_data["current_price"]).mean() * 100
-
-    st.markdown(f"🎯 **Median Simulated Value:** `${p50:.2f}` per share")
-    st.markdown(f"🛡️ **Conservative case (10th percentile):** `${p10:.2f}` | **Optimistic case (90th percentile):** `${p90:.2f}`")
-
-    fig_dist = px.histogram(
-        sim_prices, 
-        nbins=50, 
-        color_discrete_sequence=['#0284c7']
-    )
-    fig_dist.add_vline(x=stock_data['current_price'], line_dash="dash", line_color="red", annotation_text="Current Market Price")
-    fig_dist.update_layout(
-        margin=dict(t=20, b=20, l=20, r=20),
-        showlegend=False,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)"
-    )
-    st.plotly_chart(fig_dist, use_container_width=True)
-
-st.markdown("---")
-st.subheader("⚖️ Damodaran's Triad Check: Possible, Plausible, and Probable")
-st.caption("A perfect story is worthless if it cannot pass the test of operational plausibility and economic bounds.")
-
-t_col1, t_col2, t_col3 = st.columns(3)
-
-with t_col1:
-    st.markdown("### 🛠️ Possible")
-    # Mathematical boundary limits check
-    if target_margin < 0.80 and cost_of_capital > 0.035:
-        st.success("✅ **Passed Mathematical Feasibility**")
-        st.markdown("""
-        * Target operating margin restricted below 80%.
-        * Cost of capital is logically bounded above structural risk-free terminal boundaries.
-        """)
-    else:
-        st.error("❌ **Mathematical Boundary Breach**")
-        st.markdown("* Assumed margins or financing costs break base corporate finance boundary physics.")
-
-with t_col2:
-    st.markdown("### ⚖️ Plausible")
-    # Historical base rate limits check
-    warnings = []
-    if abs(growth_rate - stock_data["revenue_growth_1y"]) > 0.25:
-        warnings.append(f"• Targeted growth ({growth_rate*100:.0f}%) is far from historical actual growth ({stock_data['revenue_growth_1y']*100:.0f}%).")
-    if target_margin > (ind_avg_margin + 0.15):
-        warnings.append(f"• Targeted margin is exceptionally high compared to industry averages ({ind_avg_margin*100:.0f}%).")
-
-    if not warnings:
-        st.success("✅ **Passed Operational Plausibility**")
-        st.markdown("* Selected inputs remain within plausible industry base rates and benchmarks.")
-    else:
-        st.warning("⚠️ **Ambitious Narrative Alerts:**")
-        for w in warnings:
-            st.markdown(w)
-
-with t_col3:
-    st.markdown("### 🎲 Probable")
-    # Monte Carlo Likelihood check
-    if undervalued_prob > 75:
-        st.success(f"🎯 **High Likelihood of Undervaluation: {undervalued_prob:.1f}%**")
-        st.markdown(f"• **{undervalued_prob:.1f}%** of simulation runs exceed the current price of `${stock_data['current_price']:.2f}`.")
-    elif undervalued_prob >= 35:
-        st.info(f"⚖️ **Balanced / Fairly Valued: {undervalued_prob:.1f}%**")
-        st.markdown(f"• Projections represent a balanced scenario map. **{undervalued_prob:.1f}%** of simulations yield upside.")
-    else:
-        st.error(f"🚨 **High Likelihood of Overvaluation: {undervalued_prob:.1f}%**")
-        st.markdown(f"• Only **{undervalued_prob:.1f}%** of simulation runs yield intrinsic valuations above `${stock_data['current_price']:.2f}`.")
+    ### 3. Possible, Plausible, and Probable
+    To audit any investment, Damodaran implements the **Triad Sanity Filter**:
+    * **Possible:** Does the story break math? (e.g., target operating margins cannot physically exceed 100%).
+    * **Plausible:** Is this narrative realistic relative to industrial norms and history? (e.g., if a company has historically grown at 3%, modeling 60% growth is highly implausible unless a massive structural pivot is proven).
+    * **Probable:** What are the actual odds? We run **2,000 parallel Monte Carlo universes** to see the exact probability distribution of your inputs, plotting current market pricing against the resulting distribution.
+    """)
