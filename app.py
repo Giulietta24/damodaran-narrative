@@ -558,24 +558,24 @@ growth_rate = st.sidebar.slider(
     "High Growth Rate (Yr 1-5)", 
     0.0, 0.80, float(calc_growth), 0.01, 
     format="%.0f%%", 
-    key=f"growth_s_{slider_reset_key}" if 'slider_reset_key' in locals() else f"growth_s_{slider_reset_key}"
+    key=f"growth_s_{slider_key}"
 )
 target_margin = st.sidebar.slider(
     "Target Operating Margin (Yr 5)", 
     -0.10, 0.60, float(calc_margin), 0.01, 
     format="%.0f%%", 
-    key=f"margin_s_{slider_reset_key}" if 'slider_reset_key' in locals() else f"margin_s_{ticker_input}"
+    key=f"margin_s_{slider_key}"
 )
 sales_to_cap = st.sidebar.slider(
     "Capital Efficiency (Sales-to-Capital)", 
     0.1, 5.0, float(calc_sc), 0.1, 
-    key=f"cap_s_{slider_reset_key}" if 'slider_reset_key' in locals() else f"cap_s_{ticker_input}"
+    key=f"cap_s_{slider_key}"
 )
 cost_of_capital = st.sidebar.slider(
     "Cost of Capital (WACC)", 
     0.04, 0.20, float(calc_wacc), 0.005, 
     format="%.1f%%", 
-    key=f"wacc_s_{slider_reset_key}" if 'slider_reset_key' in locals() else f"wacc_s_{ticker_input}"
+    key=f"wacc_s_{slider_key}"
 )
 
 st.sidebar.markdown("---")
