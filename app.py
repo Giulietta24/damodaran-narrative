@@ -5,256 +5,468 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Damodaran Narrative Valuation Studio", layout="wide", initial_sidebar_state="expanded")
+# ─────────────────────────────────────────────
+# 1. PAGE SETUP
+# ─────────────────────────────────────────────
+st.set_page_config(
+    page_title="Damodaran Narrative Valuation Studio",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 st.markdown("""
 <style>
-.metric-card {background-color: white; padding: 22px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); border: 1px solid #eef2f6;}
+.metric-card {
+    background-color: var(--background-color, white);
+    padding: 22px;
+    border-radius: 12px;
+    border: 1px solid #eef2f6;
+}
 .metric-title {font-size: 13px; text-transform: uppercase; color: #64748b; font-weight: 600; letter-spacing: 0.5px;}
-.metric-value {font-size: 28px; font-weight: 700; color: #0f172a;}
-.warning-box {background-color: #fef3c7; border-left: 4px solid #d97706; color: #92400e; padding: 14px 16px; border-radius: 8px; margin: 12px 0;}
-.success-box {background-color: #f0fdf4; border-left: 4px solid #16a34a; color: #166534; padding: 14px 16px; border-radius: 8px; margin: 12px 0;}
-.info-box {background-color: #f0f9ff; border-left: 4px solid #0284c7; color: #075985; padding: 14px 16px; border-radius: 8px; margin: 12px 0;}
-.score-card {text-align: center; background: linear-gradient(135deg, #1e293b, #0f172a); color: white; padding: 22px; border-radius: 12px; box-shadow: 0 4px 20px rgba(15,23,42,0.15);}
-.small-note {font-size: 12px; color: #64748b;}
+.metric-value {font-size: 28px; font-weight: 700; color: inherit;}
+.warning-box  {background-color: #fef3c7; border-left: 4px solid #d97706; color: #92400e; padding: 14px 16px; border-radius: 0 8px 8px 0; margin: 10px 0;}
+.success-box  {background-color: #f0fdf4; border-left: 4px solid #16a34a; color: #166534; padding: 14px 16px; border-radius: 0 8px 8px 0; margin: 10px 0;}
+.info-box     {background-color: #f0f9ff; border-left: 4px solid #0284c7; color: #075985; padding: 14px 16px; border-radius: 0 8px 8px 0; margin: 10px 0;}
+.score-card   {text-align: center; background: #1e293b; color: white; padding: 22px; border-radius: 12px;}
+.small-note   {font-size: 12px; color: #64748b; margin: 4px 0;}
 </style>
 """, unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────
+# 2. DISCLAIMER
+# ─────────────────────────────────────────────
+st.warning(
+    "⚠️ For educational and research purposes only. "
+    "This tool produces illustrative valuation estimates, not investment recommendations. "
+    "Not financial, legal, or tax advice."
+)
+
+st.title("📊 Aswath Damodaran Narrative Valuation Studio")
+st.caption(
+    '"Valuation is a bridge between narrative and numbers. '
+    'If you have numbers without a narrative, you have no soul. '
+    'If you have a narrative without numbers, you have a fairy tale." — Prof. Aswath Damodaran'
+)
+
+# ─────────────────────────────────────────────
+# 3. DAMODARAN INDUSTRY DATA
+# ─────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def load_damodaran_industry_data():
     url = "https://pages.stern.nyu.edu/~adamodar/pc/datasets/psdata.xls"
     try:
-        df = pd.read_excel(url)
+        df = pd.read_excel(url, header=None)
+        # Find the actual header row by scanning for "Industry"
+        header_row = 0
+        for i, row in df.iterrows():
+            if any("industry" in str(v).lower() for v in row.values):
+                header_row = i
+                break
+        df = pd.read_excel(url, header=header_row)
         df.columns = [str(c).strip() for c in df.columns]
-        rename_map = {"Industry Name": "Industry", "Pre-tax Operating Margin": "PreTaxOpMargin", "Price/Sales": "PriceSales"}
-        df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-        return df
-    except Exception:
+        # Fuzzy column matching
+        col_map = {}
+        for c in df.columns:
+            cl = c.lower()
+            if "industry" in cl and "name" in cl:
+                col_map[c] = "Industry"
+            elif "pre-tax" in cl and "margin" in cl:
+                col_map[c] = "PreTaxOpMargin"
+            elif "price" in cl and "sale" in cl:
+                col_map[c] = "PriceSales"
+        df = df.rename(columns=col_map)
+        required = {"Industry", "PreTaxOpMargin", "PriceSales"}
+        if not required.issubset(df.columns):
+            raise ValueError(f"Column mismatch. Found: {list(df.columns[:8])}")
+        df["PreTaxOpMargin"] = pd.to_numeric(df["PreTaxOpMargin"], errors="coerce")
+        df["PriceSales"] = pd.to_numeric(df["PriceSales"], errors="coerce")
+        return df.dropna(subset=["Industry"])
+    except Exception as e:
+        st.sidebar.caption(f"ℹ️ Damodaran data fetch failed ({e}). Using curated fallback.")
         return pd.DataFrame({
-            "Industry": ["Software (System & Application)", "Semiconductor", "Technology Hardware", "Pharmaceuticals", "Integrated Oil & Gas", "Banks", "Retail (Online)", "Automotive"],
-            "PriceSales": [11.01, 15.46, 6.43, 5.63, 2.00, 3.67, 4.50, 1.25],
-            "PreTaxOpMargin": [0.3321, 0.3531, 0.2249, 0.2954, 0.2582, 0.1250, 0.0850, 0.0720],
+            "Industry": [
+                "Software (System & Application)", "Semiconductor",
+                "Technology Hardware", "Pharmaceuticals",
+                "Integrated Oil & Gas", "Banks",
+                "Retail (Online)", "Automotive",
+                "Telecom Services", "Healthcare Products",
+                "Financial Svcs. (Non-bank & Insurance)", "Entertainment"
+            ],
+            "PriceSales":      [11.01, 15.46, 6.43, 5.63, 2.00, 3.67, 4.50, 1.25, 2.10, 4.80, 3.20, 3.50],
+            "PreTaxOpMargin":  [0.3321, 0.3531, 0.2249, 0.2954, 0.2582, 0.1250, 0.0850, 0.0720, 0.1850, 0.2100, 0.2200, 0.1500],
         })
 
+# ─────────────────────────────────────────────
+# 4. STOCK DATA FETCH
+# ─────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def fetch_stock_data(ticker_symbol):
     ticker_symbol = ticker_symbol.upper().strip()
+    # Fallback profiles — prices tagged with date for transparency
     profiles = {
-        "AAPL": {"company_name": "Apple Inc.", "sector": "Technology", "industry": "Technology Hardware", "revenue_ttm": 391_000_000_000, "operating_margin": 0.307, "net_margin": 0.263, "debt_to_equity": 1.45, "current_price": 300.0, "market_cap": 4_400_000_000_000, "shares_outstanding": 14_690_000_000, "cash": 73_000_000_000, "total_debt": 108_000_000_000, "revenue_growth_1y": 0.02, "non_operating_assets": 158_000_000_000, "data_source": "fallback"},
-        "TSLA": {"company_name": "Tesla Inc.", "sector": "Automotive", "industry": "Automotive", "revenue_ttm": 96_000_000_000, "operating_margin": 0.092, "net_margin": 0.081, "debt_to_equity": 0.10, "current_price": 408.0, "market_cap": 1_300_000_000_000, "shares_outstanding": 3_180_000_000, "cash": 26_800_000_000, "total_debt": 9_500_000_000, "revenue_growth_1y": 0.18, "non_operating_assets": 5_400_000_000, "data_source": "fallback"},
-        "MSTR": {"company_name": "MicroStrategy Inc.", "sector": "Technology", "industry": "Software (System & Application)", "revenue_ttm": 496_000_000, "operating_margin": 0.10, "net_margin": 0.05, "debt_to_equity": 3.2, "current_price": 112.50, "market_cap": 40_000_000_000, "shares_outstanding": 356_000_000, "cash": 50_000_000, "total_debt": 2_200_000_000, "revenue_growth_1y": -0.02, "non_operating_assets": 16_000_000_000, "data_source": "fallback"},
-        "NVDA": {"company_name": "NVIDIA Corp.", "sector": "Technology", "industry": "Semiconductor", "revenue_ttm": 96_000_000_000, "operating_margin": 0.62, "net_margin": 0.55, "debt_to_equity": 0.20, "current_price": 210.0, "market_cap": 5_070_000_000_000, "shares_outstanding": 24_500_000_000, "cash": 25_000_000_000, "total_debt": 11_000_000_000, "revenue_growth_1y": 1.25, "non_operating_assets": 15_000_000_000, "data_source": "fallback"}
+        "AAPL": {"company_name": "Apple Inc.", "sector": "Technology", "industry": "Technology Hardware",
+                 "revenue_ttm": 391_000_000_000, "operating_margin": 0.307, "net_margin": 0.263,
+                 "debt_to_equity": 1.45, "current_price": 213.0, "market_cap": 3_270_000_000_000,
+                 "shares_outstanding": 15_330_000_000, "cash": 73_000_000_000, "total_debt": 108_000_000_000,
+                 "revenue_growth_1y": 0.02, "non_operating_assets": 158_000_000_000,
+                 "price_as_of": "Jun 2025", "data_source": "fallback"},
+        "TSLA": {"company_name": "Tesla Inc.", "sector": "Automotive", "industry": "Automotive",
+                 "revenue_ttm": 96_000_000_000, "operating_margin": 0.075, "net_margin": 0.055,
+                 "debt_to_equity": 0.10, "current_price": 248.0, "market_cap": 795_000_000_000,
+                 "shares_outstanding": 3_200_000_000, "cash": 26_800_000_000, "total_debt": 9_500_000_000,
+                 "revenue_growth_1y": 0.01, "non_operating_assets": 5_400_000_000,
+                 "price_as_of": "Jun 2025", "data_source": "fallback"},
+        "MSTR": {"company_name": "MicroStrategy Inc.", "sector": "Technology",
+                 "industry": "Software (System & Application)",
+                 "revenue_ttm": 496_000_000, "operating_margin": 0.10, "net_margin": 0.05,
+                 "debt_to_equity": 3.2, "current_price": 385.0, "market_cap": 75_000_000_000,
+                 "shares_outstanding": 195_000_000, "cash": 50_000_000, "total_debt": 6_200_000_000,
+                 "revenue_growth_1y": -0.02, "non_operating_assets": 42_000_000_000,
+                 "price_as_of": "Jun 2025", "data_source": "fallback"},
+        "NVDA": {"company_name": "NVIDIA Corp.", "sector": "Technology", "industry": "Semiconductor",
+                 "revenue_ttm": 130_000_000_000, "operating_margin": 0.62, "net_margin": 0.55,
+                 "debt_to_equity": 0.20, "current_price": 131.0, "market_cap": 3_210_000_000_000,
+                 "shares_outstanding": 24_500_000_000, "cash": 25_000_000_000, "total_debt": 11_000_000_000,
+                 "revenue_growth_1y": 1.22, "non_operating_assets": 15_000_000_000,
+                 "price_as_of": "Jun 2025", "data_source": "fallback"},
     }
     try:
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.info or {}
         if not info:
             raise ValueError("No info returned")
-
-        live_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+        live_price = (info.get("currentPrice") or info.get("regularMarketPrice")
+                      or info.get("previousClose"))
         if live_price is None:
-            raise ValueError("No live price quote available")
+            raise ValueError("No live price")
 
         shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding") or 0
-        cash = info.get("totalCash") or 0.0
-        debt = info.get("totalDebt") or 0.0
+        cash  = info.get("totalCash") or 0.0
+        debt  = info.get("totalDebt") or 0.0
 
+        # Revenue growth — prefer Y-o-Y from financials, fall back to reported revenueGrowth
         rev_growth = None
-        rg = info.get("revenueGrowth")
-        if isinstance(rg, (int, float)) and -0.9 < rg < 5.0:
-            rev_growth = float(rg)
-
-        historical_growth = None
         try:
             fin = ticker.financials
             if fin is not None and not fin.empty:
-                revenue_rows = [idx for idx in fin.index if any(x in str(idx).lower() for x in ["revenue", "sales", "turnover"])]
+                # FIX: was rev_row[0], correct variable is revenue_rows
+                revenue_rows = [
+                    idx for idx in fin.index
+                    if any(x in str(idx).lower() for x in ["revenue", "sales", "turnover"])
+                ]
                 if revenue_rows:
                     rev_series = fin.loc[revenue_rows[0]].dropna()
                     if len(rev_series) >= 2 and rev_series.iloc[1] != 0:
-                        historical_growth = float((rev_series.iloc[0] - rev_series.iloc[1]) / rev_series.iloc[1])
+                        calc = float(
+                            (rev_series.iloc[0] - rev_series.iloc[1]) / rev_series.iloc[1]
+                        )
+                        if -0.9 < calc < 5.0:
+                            rev_growth = calc
         except Exception:
             pass
 
-        if historical_growth is not None and -0.9 < historical_growth < 5.0:
-            rev_growth = historical_growth
-        elif rev_growth is None:
+        if rev_growth is None:
+            rg = info.get("revenueGrowth")
+            if isinstance(rg, (int, float)) and -0.9 < rg < 5.0:
+                rev_growth = float(rg)
+        if rev_growth is None:
             rev_growth = 0.10
 
+        # Non-operating assets from balance sheet
+        non_op = 0.0
         try:
             balance = ticker.balance_sheet
-            non_op = 0.0
             if balance is not None and not balance.empty:
-                for col in ["Long Term Investments", "Other Long Term Assets", "Other Current Assets", "Other Non Current Assets"]:
+                for col in ["Long Term Investments", "Other Long Term Assets",
+                            "Other Current Assets", "Other Non Current Assets"]:
                     if col in balance.index:
                         series = balance.loc[col].dropna()
                         if not series.empty:
                             non_op = max(non_op, float(series.iloc[0]))
         except Exception:
-            non_op = 0.0
+            pass
 
         profile_base = profiles.get(ticker_symbol, {})
+        d_to_e = info.get("debtToEquity")
         data = {
-            "ticker": ticker_symbol,
-            "company_name": info.get("longName", info.get("shortName", profile_base.get("company_name", f"{ticker_symbol} Corp"))),
-            "sector": info.get("sector", profile_base.get("sector", "Other")),
-            "industry": info.get("industry", profile_base.get("industry", "Other")),
-            "revenue_ttm": info.get("totalRevenue") or info.get("trailingRevenue") or profile_base.get("revenue_ttm", 1_000_000_000),
-            "operating_margin": info.get("operatingMargins") if info.get("operatingMargins") is not None else profile_base.get("operating_margin", 0.12),
-            "net_margin": info.get("profitMargins") if info.get("profitMargins") is not None else profile_base.get("net_margin", 0.08),
-            "debt_to_equity": (info.get("debtToEquity") / 100.0) if isinstance(info.get("debtToEquity"), (int, float)) else profile_base.get("debt_to_equity", 0.5),
-            "current_price": float(live_price),
-            "market_cap": info.get("marketCap") or (shares * float(live_price) if shares else profile_base.get("market_cap", 0)),
-            "shares_outstanding": shares if shares else profile_base.get("shares_outstanding", 10_000_000),
-            "cash": cash if cash > 0 else profile_base.get("cash", 0.0),
-            "total_debt": debt if debt > 0 else profile_base.get("total_debt", 0.0),
-            "revenue_growth_1y": rev_growth,
+            "ticker":              ticker_symbol,
+            "company_name":        info.get("longName", info.get("shortName",
+                                       profile_base.get("company_name", f"{ticker_symbol} Corp"))),
+            "sector":              info.get("sector",    profile_base.get("sector", "Other")),
+            "industry":            info.get("industry",  profile_base.get("industry", "Other")),
+            "revenue_ttm":         info.get("totalRevenue") or profile_base.get("revenue_ttm", 1_000_000_000),
+            "operating_margin":    info.get("operatingMargins") if info.get("operatingMargins") is not None
+                                   else profile_base.get("operating_margin", 0.12),
+            "net_margin":          info.get("profitMargins") if info.get("profitMargins") is not None
+                                   else profile_base.get("net_margin", 0.08),
+            "debt_to_equity":      (float(d_to_e) / 100.0) if isinstance(d_to_e, (int, float))
+                                   else profile_base.get("debt_to_equity", 0.5),
+            "current_price":       float(live_price),
+            "market_cap":          info.get("marketCap") or
+                                   (shares * float(live_price) if shares else profile_base.get("market_cap", 0)),
+            "shares_outstanding":  shares if shares else profile_base.get("shares_outstanding", 10_000_000),
+            "cash":                cash if cash > 0 else profile_base.get("cash", 0.0),
+            "total_debt":          debt if debt > 0 else profile_base.get("total_debt", 0.0),
+            "revenue_growth_1y":   rev_growth,
             "non_operating_assets": non_op if non_op > 0 else profile_base.get("non_operating_assets", 0.0),
-            "data_source": "live"
+            "price_as_of":         "live",
+            "data_source":         "live",
         }
         return data, True
     except Exception:
         if ticker_symbol in profiles:
-            profile_data = profiles[ticker_symbol].copy()
-            profile_data["ticker"] = ticker_symbol
-            profile_data["market_cap"] = profile_data["shares_outstanding"] * profile_data["current_price"]
-            return profile_data, True
-        fallback_data = {"ticker": ticker_symbol, "company_name": f"{ticker_symbol} Enterprise", "sector": "Industrial Tech", "industry": "Software (System & Application)", "revenue_ttm": 1_200_000_000, "operating_margin": 0.14, "net_margin": 0.09, "debt_to_equity": 0.40, "current_price": 50.0, "market_cap": 5_000_000_000, "shares_outstanding": 100_000_000, "cash": 300_000_000, "total_debt": 150_000_000, "revenue_growth_1y": 0.12, "non_operating_assets": 50_000_000, "data_source": "demo"}
-        return fallback_data, False
+            p = profiles[ticker_symbol].copy()
+            p["ticker"] = ticker_symbol
+            p["market_cap"] = p["shares_outstanding"] * p["current_price"]
+            return p, True
+        generic = {
+            "ticker": ticker_symbol, "company_name": f"{ticker_symbol} Enterprise",
+            "sector": "Industrial Tech", "industry": "Software (System & Application)",
+            "revenue_ttm": 1_200_000_000, "operating_margin": 0.14, "net_margin": 0.09,
+            "debt_to_equity": 0.40, "current_price": 50.0, "market_cap": 5_000_000_000,
+            "shares_outstanding": 100_000_000, "cash": 300_000_000, "total_debt": 150_000_000,
+            "revenue_growth_1y": 0.12, "non_operating_assets": 50_000_000,
+            "price_as_of": "demo", "data_source": "demo",
+        }
+        return generic, False
 
+# ─────────────────────────────────────────────
+# 5. NARRATIVE DEFAULTS CLASSIFIER
+# ─────────────────────────────────────────────
 def classify_narrative_defaults(stock_data, ind_avg_margin):
-    hist_growth = stock_data["revenue_growth_1y"]
-    tam_idx = 0 if hist_growth > 0.25 else 1 if hist_growth >= 0.06 else 2
-    margin = stock_data["operating_margin"]
-    moat_idx = 0 if (margin > 0.25 or margin > (ind_avg_margin + 0.05)) else 1 if margin >= 0.10 else 2
-    industry_str = str(stock_data["industry"]).lower()
-    reinvest_idx = 0 if ("software" in industry_str or "internet" in industry_str or "service" in industry_str) else 2 if ("automotive" in industry_str or "hardware" in industry_str or "manufacturing" in industry_str or "oil" in industry_str) else 1
-    mcap = stock_data["market_cap"]
-    debt = stock_data["debt_to_equity"]
-    risk_idx = 2 if (mcap > 100e9 and debt < 0.5) else 0 if (mcap < 5e9 or debt > 1.5) else 1
-    return tam_idx, moat_idx, reinvest_idx, risk_idx
+    g = stock_data["revenue_growth_1y"]
+    tam_idx  = 0 if g > 0.25 else 1 if g >= 0.06 else 2
+    m = stock_data["operating_margin"]
+    moat_idx = 0 if (m > 0.25 or m > ind_avg_margin + 0.05) else 1 if m >= 0.10 else 2
+    ind = str(stock_data["industry"]).lower()
+    if any(x in ind for x in ["software", "internet", "service"]):
+        ri = 0
+    elif any(x in ind for x in ["automotive", "hardware", "manufactur", "oil"]):
+        ri = 2
+    else:
+        ri = 1
+    mc = stock_data["market_cap"]
+    de = stock_data["debt_to_equity"]
+    risk_idx = 2 if (mc > 100e9 and de < 0.5) else 0 if (mc < 5e9 or de > 1.5) else 1
+    return tam_idx, moat_idx, ri, risk_idx
 
-def calculate_2stage_dcf(rev_0, margin_0, target_margin, growth_high, sc_ratio, wacc_high, terminal_growth=0.03, terminal_wacc=0.075, tax_rate=0.21, return_details=False):
-    margin_start = float(np.clip(margin_0, -0.40, 0.80))
-    target_margin = float(np.clip(target_margin, -0.40, 0.80))
-    growth_high = float(np.clip(growth_high, -0.50, 0.80))
-    sc_ratio = max(float(sc_ratio), 0.1)
-    wacc_high = float(np.clip(wacc_high, 0.04, 0.25))
-    terminal_growth = float(np.clip(terminal_growth, -0.02, 0.08))
-    terminal_wacc = float(np.clip(max(terminal_wacc, wacc_high), 0.05, 0.25))
-    revenues = []
-    margins = []
-    ebits = []
-    reinvestments = []
-    fcffs = []
-    discount_factors = []
-    pvs = []
+# ─────────────────────────────────────────────
+# 6. FULL 3-STAGE DCF  (Damodaran standard)
+#    Stage 1: Years 1-5  — high growth
+#    Stage 2: Years 6-10 — linear deceleration to terminal
+#    Stage 3: Terminal value
+# ─────────────────────────────────────────────
+def calculate_3stage_dcf(
+    rev_0, margin_0, target_margin, growth_high,
+    sc_ratio, wacc_high,
+    terminal_growth=0.025, tax_rate=0.21,
+    return_details=False
+):
+    margin_start   = float(np.clip(margin_0,      -0.40, 0.80))
+    target_margin  = float(np.clip(target_margin, -0.40, 0.80))
+    growth_high    = float(np.clip(growth_high,   -0.50, 0.80))
+    sc_ratio       = max(float(sc_ratio), 0.1)
+    wacc_high      = float(np.clip(wacc_high,      0.04, 0.25))
+    terminal_growth = float(np.clip(terminal_growth, -0.02, 0.06))
+
+    # FIX: Terminal WACC derived from user WACC — never lower than 7.5%
+    # Damodaran: stable WACC converges toward risk-free + mature risk premium
+    terminal_wacc = max(wacc_high, 0.075)
+    # WACC transitions linearly from wacc_high to terminal_wacc over stage 2
+    stable_growth = terminal_growth   # growth in stable stage
+
+    records = []
     current_rev = float(max(rev_0, 0.0))
+
+    # ── Stage 1: Years 1-5 ──────────────────────────────────────────────
     for year in range(1, 6):
         prev_rev = current_rev
         current_rev = prev_rev * (1 + growth_high)
-        revenues.append(current_rev)
-        current_margin = margin_start + (target_margin - margin_start) * (year / 5.0)
-        current_margin = float(np.clip(current_margin, -0.40, 0.80))
-        margins.append(current_margin)
-        ebit = current_rev * current_margin
-        ebits.append(ebit)
-        delta_rev = current_rev - prev_rev
-        reinvestment = max(0.0, delta_rev / sc_ratio)
-        reinvestments.append(reinvestment)
-        nopat = ebit * (1 - tax_rate)
-        fcff = nopat - reinvestment
-        fcffs.append(fcff)
-        df = 1 / ((1 + wacc_high) ** year)
-        discount_factors.append(df)
-        pvs.append(fcff * df)
-    terminal_rev = revenues[-1] * (1 + terminal_growth)
-    terminal_ebit = terminal_rev * target_margin
-    terminal_nopat = terminal_ebit * (1 - tax_rate)
-    terminal_reinvestment_rate = terminal_growth / terminal_wacc if terminal_wacc > 0 else 0.0
-    terminal_reinvestment = terminal_nopat * terminal_reinvestment_rate
-    terminal_fcff = terminal_nopat - terminal_reinvestment
-    denom = terminal_wacc - terminal_growth
-    terminal_value = terminal_fcff / denom if denom > 0.005 else np.nan
-    pv_terminal = terminal_value * discount_factors[-1] if np.isfinite(terminal_value) else np.nan
-    operating_assets_value = np.nansum(pvs) + (pv_terminal if np.isfinite(pv_terminal) else 0.0)
-    if return_details:
-        return {"years": list(range(1, 6)), "revenues": revenues, "margins": margins, "ebits": ebits, "reinvestments": reinvestments, "fcffs": fcffs, "pvs": pvs, "terminal_value": terminal_value, "pv_terminal_value": pv_terminal, "operating_value": operating_assets_value}
-    return operating_assets_value
+        margin   = margin_start + (target_margin - margin_start) * (year / 5.0)
+        margin   = float(np.clip(margin, -0.40, 0.80))
+        ebit     = current_rev * margin
+        nopat    = ebit * (1 - tax_rate)
+        reinvest = max(0.0, (current_rev - prev_rev) / sc_ratio)
+        fcff     = nopat - reinvest
+        wacc_y   = wacc_high
+        df       = 1 / (1 + wacc_y) ** year
+        records.append(dict(year=year, stage=1, revenue=current_rev, growth=growth_high,
+                            margin=margin, ebit=ebit, reinvestment=reinvest,
+                            fcff=fcff, wacc=wacc_y, df=df, pv=fcff * df))
 
-def run_vectorized_monte_carlo(rev_0, margin_0, target_margin_base, growth_base, sc_ratio, wacc_base, shares, net_debt, non_op, n_sim=2000):
-    np.random.seed(42)
-    rev_0 = float(max(rev_0, 0.0))
-    margin_0 = float(np.clip(margin_0, -0.40, 0.80))
-    target_margin_base = float(np.clip(target_margin_base, -0.40, 0.80))
-    growth_base = float(np.clip(growth_base, -0.50, 0.80))
-    sc_ratio = max(float(sc_ratio), 0.1)
-    wacc_base = float(np.clip(wacc_base, 0.04, 0.25))
-    shares = max(float(shares), 1.0)
-    net_debt = float(net_debt)
-    non_op = float(non_op)
-    sim_growth = np.random.normal(growth_base, 0.04, n_sim).clip(0.00, 0.80)
-    sim_margin = np.random.normal(target_margin_base, 0.03, n_sim).clip(-0.10, 0.60)
-    sim_wacc = np.random.normal(wacc_base, 0.01, n_sim).clip(0.04, 0.25)
-    tax_rate = 0.21
-    terminal_growth = 0.03
-    terminal_wacc = 0.075
-    years = np.arange(1, 6)
-    sim_growth_expanded = sim_growth[:, np.newaxis]
-    sim_margin_expanded = sim_margin[:, np.newaxis]
-    sim_wacc_expanded = sim_wacc[:, np.newaxis]
-    revenues = rev_0 * (1 + sim_growth_expanded) ** years
-    prev_revenues = np.zeros_like(revenues)
-    prev_revenues[:, 0] = rev_0
-    prev_revenues[:, 1:] = revenues[:, :-1]
-    margin_start = margin_0
-    margins = margin_start + (sim_margin_expanded - margin_start) * (years / 5.0)
-    ebits = revenues * margins
-    nopats = ebits * (1 - tax_rate)
-    delta_revenues = revenues - prev_revenues
-    reinvestments = np.maximum(0.0, delta_revenues / sc_ratio)
-    fcffs = nopats - reinvestments
-    discount_factors = (1 + sim_wacc_expanded) ** years
-    pvs = fcffs / discount_factors
-    sum_pv_fcff = np.sum(pvs, axis=1)
-    terminal_rev = revenues[:, -1] * (1 + terminal_growth)
-    terminal_ebit = terminal_rev * sim_margin
-    terminal_nopat = terminal_ebit * (1 - tax_rate)
-    terminal_reinvestment_rate = terminal_growth / terminal_wacc
-    terminal_reinvestment = terminal_nopat * terminal_reinvestment_rate
-    terminal_fcff = terminal_nopat - terminal_reinvestment
+    # ── Stage 2: Years 6-10 — deceleration ─────────────────────────────
+    # Growth decelerates linearly from growth_high → terminal_growth
+    # WACC decelerates linearly from wacc_high → terminal_wacc
+    # Margin held at target_margin (already reached by year 5)
+    cum_df_5 = records[-1]["df"]  # discount factor at end of year 5
+
+    for step in range(1, 6):           # step 1 = year 6, step 5 = year 10
+        year = 5 + step
+        frac = step / 5.0              # 0.2 → 1.0
+        growth_y = growth_high + (stable_growth - growth_high) * frac
+        wacc_y   = wacc_high   + (terminal_wacc - wacc_high)   * frac
+
+        prev_rev = current_rev
+        current_rev = prev_rev * (1 + growth_y)
+        margin   = target_margin
+        ebit     = current_rev * margin
+        nopat    = ebit * (1 - tax_rate)
+        reinvest = max(0.0, (current_rev - prev_rev) / sc_ratio)
+        fcff     = nopat - reinvest
+
+        # Discount factor compounds from prior year
+        prev_df = records[-1]["df"]
+        df_y    = prev_df / (1 + wacc_y)
+        records.append(dict(year=year, stage=2, revenue=current_rev, growth=growth_y,
+                            margin=margin, ebit=ebit, reinvestment=reinvest,
+                            fcff=fcff, wacc=wacc_y, df=df_y, pv=fcff * df_y))
+
+    # ── Stage 3: Terminal Value ─────────────────────────────────────────
+    # Damodaran: reinvestment rate = g / ROC; ROC → terminal_wacc at maturity
+    terminal_rev     = current_rev * (1 + terminal_growth)
+    terminal_ebit    = terminal_rev * target_margin
+    terminal_nopat   = terminal_ebit * (1 - tax_rate)
+    rr               = terminal_growth / terminal_wacc if terminal_wacc > 0 else 0.0
+    terminal_reinvest = terminal_nopat * rr
+    terminal_fcff    = terminal_nopat - terminal_reinvest
+
     denom = terminal_wacc - terminal_growth
-    terminal_value = np.where(denom > 0.005, terminal_fcff / denom, np.nan)
-    pv_terminal = terminal_value / discount_factors[:, -1]
-    operating_value = sum_pv_fcff + pv_terminal
-    equity_value = operating_value - net_debt + non_op
-    sim_prices = np.maximum(0.0, equity_value / shares)
-    sim_prices = sim_prices[np.isfinite(sim_prices)]
+    terminal_value   = terminal_fcff / denom if denom > 0.005 else np.nan
+    last_df          = records[-1]["df"]
+    pv_terminal      = terminal_value * last_df if np.isfinite(terminal_value) else np.nan
+
+    sum_pv_fcff = sum(r["pv"] for r in records)
+    operating_value = float(np.nansum([sum_pv_fcff,
+                                       pv_terminal if np.isfinite(pv_terminal) else 0.0]))
+
+    if return_details:
+        return {
+            "records":          records,
+            "terminal_value":   terminal_value,
+            "pv_terminal_value": pv_terminal,
+            "operating_value":  operating_value,
+            "terminal_wacc":    terminal_wacc,
+            "terminal_growth":  terminal_growth,
+        }
+    return operating_value
+
+# ─────────────────────────────────────────────
+# 7. VECTORIZED 3-STAGE MONTE CARLO
+# ─────────────────────────────────────────────
+def run_vectorized_monte_carlo(
+    rev_0, margin_0, target_margin_base, growth_base,
+    sc_ratio, wacc_base, shares, net_debt, non_op,
+    terminal_growth_base=0.025, tax_rate=0.21, n_sim=2000
+):
+    np.random.seed(42)
+    rev_0    = float(max(rev_0, 0.0))
+    margin_0 = float(np.clip(margin_0, -0.40, 0.80))
+    target_m = float(np.clip(target_margin_base, -0.40, 0.80))
+    g_base   = float(np.clip(growth_base, -0.50, 0.80))
+    sc       = max(float(sc_ratio), 0.1)
+    w_base   = float(np.clip(wacc_base, 0.04, 0.25))
+    shares   = max(float(shares), 1.0)
+    t_growth = float(np.clip(terminal_growth_base, -0.02, 0.06))
+
+    sim_growth  = np.random.normal(g_base,   0.04, n_sim).clip(0.00, 0.80)
+    sim_margin  = np.random.normal(target_m, 0.03, n_sim).clip(-0.10, 0.60)
+    sim_wacc    = np.random.normal(w_base,   0.01, n_sim).clip(0.04, 0.25)
+
+    # FIX: terminal WACC per simulation — never below 7.5%
+    sim_term_wacc = np.maximum(sim_wacc, 0.075)
+
+    years1 = np.arange(1, 6)    # stage 1
+    years2 = np.arange(1, 6)    # stage 2 steps (years 6-10)
+
+    sg = sim_growth[:, np.newaxis]
+    sm = sim_margin[:, np.newaxis]
+    sw = sim_wacc[:, np.newaxis]
+
+    # ── Stage 1 ─────────────────────────────────────────────────────────
+    revenues_s1 = rev_0 * (1 + sg) ** years1
+    prev_s1 = np.zeros_like(revenues_s1)
+    prev_s1[:, 0] = rev_0
+    prev_s1[:, 1:] = revenues_s1[:, :-1]
+    margins_s1  = margin_0 + (sm - margin_0) * (years1 / 5.0)
+    nopats_s1   = revenues_s1 * margins_s1 * (1 - tax_rate)
+    reinvest_s1 = np.maximum(0.0, (revenues_s1 - prev_s1) / sc)
+    fcff_s1     = nopats_s1 - reinvest_s1
+    df_s1       = (1 + sw) ** years1
+    pv_s1       = fcff_s1 / df_s1
+    sum_pv_s1   = pv_s1.sum(axis=1)
+
+    # ── Stage 2: deceleration years 6-10 ─────────────────────────────
+    fracs    = years2 / 5.0                              # 0.2 → 1.0
+    g_s2     = sg + (t_growth - sg) * fracs             # (N,5)
+    w_s2     = sw + (sim_term_wacc[:, np.newaxis] - sw) * fracs
+
+    rev_end_s1 = revenues_s1[:, -1:]                    # (N,1)
+    # compound revenue through stage 2
+    rev_s2 = np.zeros((n_sim, 5))
+    rev_s2[:, 0] = (rev_end_s1 * (1 + g_s2[:, :1])).squeeze()
+    for i in range(1, 5):
+        rev_s2[:, i] = rev_s2[:, i-1] * (1 + g_s2[:, i])
+
+    prev_s2 = np.zeros_like(rev_s2)
+    prev_s2[:, 0] = revenues_s1[:, -1]
+    prev_s2[:, 1:] = rev_s2[:, :-1]
+
+    nopats_s2   = rev_s2 * sm * (1 - tax_rate)          # margin stays at target
+    reinvest_s2 = np.maximum(0.0, (rev_s2 - prev_s2) / sc)
+    fcff_s2     = nopats_s2 - reinvest_s2
+
+    # Discount factors: stage 2 compounds from end of stage 1
+    cum_df_s1  = df_s1[:, -1:]                          # (N,1)
+    df_s2_incr = (1 + w_s2) ** years2
+    df_s2      = cum_df_s1 * df_s2_incr
+    pv_s2      = fcff_s2 / df_s2
+    sum_pv_s2  = pv_s2.sum(axis=1)
+
+    # ── Stage 3: Terminal Value ──────────────────────────────────────
+    rev_term    = rev_s2[:, -1] * (1 + t_growth)
+    nopat_term  = rev_term * sim_margin * (1 - tax_rate)
+    rr          = t_growth / sim_term_wacc
+    fcff_term   = nopat_term * (1 - rr)
+    denom       = sim_term_wacc - t_growth
+    tv          = np.where(denom > 0.005, fcff_term / denom, np.nan)
+    last_df     = df_s2[:, -1]
+    pv_tv       = tv / last_df
+
+    # Equity value
+    op_value    = sum_pv_s1 + sum_pv_s2 + np.nan_to_num(pv_tv, nan=0.0)
+    eq_value    = op_value - float(net_debt) + float(non_op)
+    sim_prices  = np.maximum(0.0, eq_value / shares)
+    sim_prices  = sim_prices[np.isfinite(sim_prices)]
     return sim_prices
 
-def calculate_story_consistency(story_tam, story_moat, story_reinvestment, story_risk, growth_rate, target_margin, sales_to_cap, cost_of_capital):
+# ─────────────────────────────────────────────
+# 8. STORY CONSISTENCY CHECKER
+# ─────────────────────────────────────────────
+def calculate_story_consistency(
+    story_tam, story_moat, story_reinvestment, story_risk,
+    growth_rate, target_margin, sales_to_cap, cost_of_capital
+):
     score = 100
     critiques = []
     if "Disruptor" in story_tam and sales_to_cap < 1.0:
         score -= 20
-        critiques.append("High-growth story but weak capital efficiency.")
+        critiques.append("High-growth disruptor story but capital efficiency is very low. Fast growth with poor efficiency requires excessive capital.")
     if "Monopoly" in story_moat and target_margin < 0.15:
         score -= 15
-        critiques.append("Strong moat claim but modest margin target.")
+        critiques.append("Monopoly / network-effect moat claimed but target margin is below 15%. Genuine moats command stronger margins.")
     elif "Commodity" in story_moat and target_margin > 0.18:
         score -= 20
-        critiques.append("Commodity business but high margin assumption.")
+        critiques.append("Commodity player narrative but target margin exceeds 18%. Price competition will erode this without a moat.")
     if "High Risk" in story_risk and cost_of_capital < 0.08:
         score -= 15
-        critiques.append("High-risk story but low WACC.")
+        critiques.append("High-risk story but WACC is below 8%. This understates the hurdle rate investors require.")
     elif "Low Risk" in story_risk and cost_of_capital > 0.12:
         score -= 10
-        critiques.append("Low-risk story but high WACC.")
+        critiques.append("Low-risk story but WACC exceeds 12%. This over-penalises a defensive company's cash flows.")
     if "Asset-Light" in story_reinvestment and sales_to_cap < 1.2:
         score -= 15
-        critiques.append("Asset-light story but low capital efficiency.")
-    score = max(10, score)
-    return score, critiques
+        critiques.append("Asset-light model selected but sales-to-capital ratio is below 1.2. Digital models should convert capital efficiently.")
+    return max(10, score), critiques
 
 def confidence_label(source, consistency_score):
     if source == "live" and consistency_score >= 80:
@@ -263,69 +475,130 @@ def confidence_label(source, consistency_score):
         return "Medium confidence"
     return "Low confidence"
 
-st.title("📊 Aswath Damodaran Narrative Valuation Studio")
-st.caption("Valuation is a bridge between narrative and numbers.")
-
+# ─────────────────────────────────────────────
+# 9. SIDEBAR INPUTS
+# ─────────────────────────────────────────────
 st.sidebar.markdown("### 🔍 Live Data Sourcing")
 ticker_input = st.sidebar.text_input("Enter Company Ticker", value="MSTR").strip().upper()
+
 stock_data, api_success = fetch_stock_data(ticker_input)
 damodaran_df = load_damodaran_industry_data()
 
-industry_match = damodaran_df[damodaran_df["Industry"].astype(str).str.contains(str(stock_data["industry"]), case=False, na=False, regex=False)]
+if not api_success:
+    st.sidebar.warning(f"⚠️ Yahoo Finance lookup failed. Using generic fallback for '{ticker_input}'.")
+
+ind_str = str(stock_data["industry"])
+industry_match = damodaran_df[
+    damodaran_df["Industry"].astype(str).str.contains(ind_str, case=False, na=False, regex=False)
+]
 if not industry_match.empty:
     ind_avg_margin = float(industry_match["PreTaxOpMargin"].iloc[0])
-    ind_avg_ps = float(industry_match["PriceSales"].iloc[0])
+    ind_avg_ps     = float(industry_match["PriceSales"].iloc[0])
 else:
     ind_avg_margin = 0.15
-    ind_avg_ps = 3.0
+    ind_avg_ps     = 3.0
 
-default_tam, default_moat, default_reinvestment, default_risk = classify_narrative_defaults(stock_data, ind_avg_margin)
+default_tam, default_moat, default_reinvestment, default_risk = classify_narrative_defaults(
+    stock_data, ind_avg_margin
+)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📖 Step 1: Tell your Business Story")
-story_tam = st.sidebar.selectbox("Market TAM & Growth Narrative", ["Market Disruptor (High growth, rapid scale, capturing massive TAM)", "Healthy Competitor (Steady expansion, solid regional market share)", "Niche Player (Slow defensive play, mature market segments)"], index=default_tam, key=f"tam_{stock_data['ticker']}")
-story_moat = st.sidebar.selectbox("Moat & Pricing Power", ["Monopoly / High Network Effects (Premium pricing, protected high margins)", "Sustainable Advantage (Strong brand loyalty, reasonable protection)", "Commodity Player (No protection, severe pricing competition)"], index=default_moat, key=f"moat_{stock_data['ticker']}")
-story_reinvestment = st.sidebar.selectbox("Reinvestment & Asset Intensity", ["Asset-Light (High efficiency, digital or licensing models)", "Balanced Reinvestment (Industry standard shared asset structure)", "Capital Intensive (Low efficiency, massive factories and CapEx)"], index=default_reinvestment, key=f"reinvest_{stock_data['ticker']}")
-story_risk = st.sidebar.selectbox("Risk Profile & WACC Anchor", ["High Risk (Emerging technology, high debt, volatile market)", "Average Risk (Established player, standard corporate leverage)", "Low Risk (Strong balance sheet, resilient recurring cash flow)"], index=default_risk, key=f"risk_{stock_data['ticker']}")
 
-historical_growth = float(stock_data["revenue_growth_1y"])
-growth_anchor = max(0.01, min(0.35, historical_growth))
-if "Disruptor" in story_tam:
-    calc_growth = max(growth_anchor * 1.5, 0.25)
-elif "Competitor" in story_tam:
-    calc_growth = max(growth_anchor, 0.08)
-else:
-    calc_growth = min(growth_anchor * 0.4, 0.05)
+story_tam = st.sidebar.selectbox(
+    "Market TAM & Growth Narrative",
+    ["Market Disruptor (High growth, rapid scale, capturing massive TAM)",
+     "Healthy Competitor (Steady expansion, solid regional market share)",
+     "Niche Player (Slow defensive play, mature market segments)"],
+    index=default_tam, key=f"tam_{stock_data['ticker']}"
+)
+story_moat = st.sidebar.selectbox(
+    "Moat & Pricing Power",
+    ["Monopoly / High Network Effects (Premium pricing, protected high margins)",
+     "Sustainable Advantage (Strong brand loyalty, reasonable protection)",
+     "Commodity Player (No protection, severe pricing competition)"],
+    index=default_moat, key=f"moat_{stock_data['ticker']}"
+)
+story_reinvestment = st.sidebar.selectbox(
+    "Reinvestment & Asset Intensity",
+    ["Asset-Light (High efficiency, digital or licensing models)",
+     "Balanced Reinvestment (Industry standard shared asset structure)",
+     "Capital Intensive (Low efficiency, massive factories and CapEx)"],
+    index=default_reinvestment, key=f"reinvest_{stock_data['ticker']}"
+)
+story_risk = st.sidebar.selectbox(
+    "Risk Profile & WACC Anchor",
+    ["High Risk (Emerging technology, high debt, volatile market)",
+     "Average Risk (Established player, standard corporate leverage)",
+     "Low Risk (Strong balance sheet, resilient recurring cash flow)"],
+    index=default_risk, key=f"risk_{stock_data['ticker']}"
+)
 
-actual_margin = float(np.clip(stock_data["operating_margin"], -0.40, 0.80))
-if "Monopoly" in story_moat:
-    calc_margin = max(actual_margin + 0.05, ind_avg_margin + 0.08)
-elif "Sustainable" in story_moat:
-    calc_margin = max(actual_margin, ind_avg_margin)
-else:
-    calc_margin = max(0.02, min(actual_margin * 0.4, ind_avg_margin * 0.4))
+# Narrative-to-number mapping
+g_anchor = max(0.01, min(0.35, float(stock_data["revenue_growth_1y"])))
+calc_growth = (max(g_anchor * 1.5, 0.25) if "Disruptor" in story_tam
+               else max(g_anchor, 0.08) if "Competitor" in story_tam
+               else min(g_anchor * 0.4, 0.05))
 
-calc_sc = 3.0 if "Asset-Light" in story_reinvestment else 1.5 if "Balanced" in story_reinvestment else 0.7
-base_wacc = 0.08 + (float(stock_data["debt_to_equity"]) * 0.005)
-calc_wacc = base_wacc + 0.03 if "High Risk" in story_risk else base_wacc if "Average" in story_risk else base_wacc - 0.015
-calc_wacc = float(np.clip(calc_wacc, 0.04, 0.18))
+a_margin = float(np.clip(stock_data["operating_margin"], -0.40, 0.80))
+calc_margin = (max(a_margin + 0.05, ind_avg_margin + 0.08) if "Monopoly" in story_moat
+               else max(a_margin, ind_avg_margin) if "Sustainable" in story_moat
+               else max(0.02, min(a_margin * 0.4, ind_avg_margin * 0.4)))
+
+calc_sc   = 3.0 if "Asset-Light" in story_reinvestment else 1.5 if "Balanced" in story_reinvestment else 0.7
+base_wacc = 0.08 + float(stock_data["debt_to_equity"]) * 0.005
+calc_wacc = float(np.clip(
+    base_wacc + 0.03 if "High Risk" in story_risk
+    else base_wacc - 0.015 if "Low Risk" in story_risk
+    else base_wacc,
+    0.04, 0.18
+))
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔢 Step 2: Fine-Tune the Drivers")
-slider_key = f"{story_tam}_{story_moat}_{story_reinvestment}_{story_risk}_{stock_data['ticker']}"
-growth_rate = st.sidebar.slider("High Growth Rate (Yr 1-5)", 0.0, 0.80, float(calc_growth), 0.01, format="%.0f%%", key=f"growth_s_{slider_key}")
-target_margin = st.sidebar.slider("Target Operating Margin (Yr 5)", -0.10, 0.60, float(calc_margin), 0.01, format="%.0f%%", key=f"margin_s_{slider_key}")
-sales_to_cap = st.sidebar.slider("Capital Efficiency (Sales-to-Capital)", 0.1, 5.0, float(calc_sc), 0.1, key=f"cap_s_{slider_key}")
-cost_of_capital = st.sidebar.slider("Cost of Capital (WACC)", 0.04, 0.20, float(calc_wacc), 0.005, format="%.1f%%", key=f"wacc_s_{slider_key}")
+slider_key = f"{story_tam[:6]}_{story_moat[:6]}_{story_reinvestment[:6]}_{story_risk[:6]}_{stock_data['ticker']}"
+
+growth_rate    = st.sidebar.slider("High Growth Rate (Yr 1-5)",            0.0, 0.80, float(calc_growth), 0.01, format="%.0f%%", key=f"g_{slider_key}")
+target_margin  = st.sidebar.slider("Target Operating Margin (Yr 5)",       -0.10, 0.60, float(calc_margin), 0.01, format="%.0f%%", key=f"m_{slider_key}")
+sales_to_cap   = st.sidebar.slider("Capital Efficiency (Sales-to-Capital)", 0.1, 5.0,  float(calc_sc),     0.1,  key=f"sc_{slider_key}")
+cost_of_capital = st.sidebar.slider("Cost of Capital (WACC)",              0.04, 0.20, float(calc_wacc),   0.005, format="%.1f%%", key=f"w_{slider_key}")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🌍 Advanced Model Settings")
+
+# FIX: Tax rate as user input — critical for non-US companies
+tax_rate_input = st.sidebar.slider(
+    "Corporate Tax Rate",
+    min_value=0.05, max_value=0.35, value=0.21, step=0.01,
+    format="%.0f%%",
+    help="Default 21% (US). Adjust for non-US: UK=25%, Ireland=12.5%, Singapore=17%, Germany=30%"
+)
+terminal_growth_input = st.sidebar.slider(
+    "Terminal Growth Rate",
+    min_value=0.00, max_value=0.05, value=0.025, step=0.005,
+    format="%.1f%%",
+    help="Long-run nominal GDP growth. Damodaran typically uses 2.5% for US, lower for mature economies."
+)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🪙 Step 3: Non-Operating Strategic Holdings")
-fetched_non_op_value = float(stock_data.get("non_operating_assets", 0.0)) / 1e9
-strategic_treasury = st.sidebar.slider("Strategic Treasury Holdings ($B)", 0.0, max(50.0, fetched_non_op_value * 2.5 + 5.0), float(fetched_non_op_value), 0.1, help="Explicitly isolate long-term strategic holdings from operating assets.")
-non_operating_assets_bytes = strategic_treasury * 1e9
+fetched_non_op = float(stock_data.get("non_operating_assets", 0.0)) / 1e9
+strategic_treasury = st.sidebar.slider(
+    "Strategic Treasury Holdings ($B)",
+    0.0, max(50.0, fetched_non_op * 2.5 + 5.0), float(fetched_non_op), 0.1,
+    help="Explicitly isolate strategic long-term holdings (e.g. MicroStrategy Bitcoin, Tencent equity portfolio) from operating assets."
+)
+non_operating_assets = strategic_treasury * 1e9
 
+# ─────────────────────────────────────────────
+# 10. MAIN DISPLAY
+# ─────────────────────────────────────────────
+price_tag = f" *(price as of {stock_data['price_as_of']})*" if stock_data.get("price_as_of") != "live" else " *(live)*"
 st.header(f"🏢 {stock_data['company_name']} ({stock_data['ticker']})")
-st.caption(f"Sector: {stock_data['sector']} | Industry: {stock_data['industry']} | Data source: {stock_data.get('data_source', 'live')}")
+st.caption(
+    f"Sector: {stock_data['sector']}  |  Industry: {stock_data['industry']}  |  "
+    f"Data: {stock_data.get('data_source','live')}{price_tag}"
+)
 
 m1, m2, m3, m4 = st.columns(4)
 with m1:
@@ -333,141 +606,390 @@ with m1:
 with m2:
     st.markdown(f"<div class='metric-card'><div class='metric-title'>TTM Revenue</div><div class='metric-value'>${stock_data['revenue_ttm']/1e9:.2f}B</div></div>", unsafe_allow_html=True)
 with m3:
-    st.markdown(f"<div class='metric-card'><div class='metric-title'>Actual Margin</div><div class='metric-value'>{float(stock_data['operating_margin'])*100:.1f}%</div></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric-card'><div class='metric-title'>Actual Operating Margin</div><div class='metric-value'>{float(stock_data['operating_margin'])*100:.1f}%</div></div>", unsafe_allow_html=True)
 with m4:
     st.markdown(f"<div class='metric-card'><div class='metric-title'>Historical Growth</div><div class='metric-value'>{float(stock_data['revenue_growth_1y'])*100:.1f}%</div></div>", unsafe_allow_html=True)
 
-st.markdown("<div class='small-note'>Margin and growth are stored as decimals internally and shown as percentages only at display time.</div>", unsafe_allow_html=True)
 st.markdown("---")
 
-dcf_result = calculate_2stage_dcf(stock_data["revenue_ttm"], stock_data["operating_margin"], target_margin, growth_rate, sales_to_cap, cost_of_capital, return_details=True)
+# ─────────────────────────────────────────────
+# 11. RUN 3-STAGE DCF
+# ─────────────────────────────────────────────
+dcf_result = calculate_3stage_dcf(
+    rev_0=stock_data["revenue_ttm"],
+    margin_0=stock_data["operating_margin"],
+    target_margin=target_margin,
+    growth_high=growth_rate,
+    sc_ratio=sales_to_cap,
+    wacc_high=cost_of_capital,
+    terminal_growth=terminal_growth_input,
+    tax_rate=tax_rate_input,
+    return_details=True
+)
+
 operating_value = float(dcf_result["operating_value"]) if np.isfinite(dcf_result["operating_value"]) else np.nan
-net_debt = float(stock_data["total_debt"]) - float(stock_data["cash"])
-equity_value = operating_value - net_debt + non_operating_assets_bytes if np.isfinite(operating_value) else np.nan
-shares_out = max(float(stock_data["shares_outstanding"]), 1.0)
-intrinsic_value_per_share = max(0.0, equity_value / shares_out) if np.isfinite(equity_value) else np.nan
+net_debt        = float(stock_data["total_debt"]) - float(stock_data["cash"])
+equity_value    = (operating_value - net_debt + non_operating_assets) if np.isfinite(operating_value) else np.nan
+shares_out      = max(float(stock_data["shares_outstanding"]), 1.0)
+intrinsic_ps    = max(0.0, equity_value / shares_out) if np.isfinite(equity_value) else np.nan
 
-pv_terminal = dcf_result["pv_terminal_value"]
-tv_contribution = (pv_terminal / operating_value) * 100 if np.isfinite(operating_value) and operating_value > 0 and np.isfinite(pv_terminal) else np.nan
-consistency_score, critiques = calculate_story_consistency(story_tam, story_moat, story_reinvestment, story_risk, growth_rate, target_margin, sales_to_cap, cost_of_capital)
+pv_tv           = dcf_result["pv_terminal_value"]
+tv_contribution = ((pv_tv / operating_value) * 100
+                   if np.isfinite(operating_value) and operating_value > 0 and np.isfinite(pv_tv)
+                   else np.nan)
+
+consistency_score, critiques = calculate_story_consistency(
+    story_tam, story_moat, story_reinvestment, story_risk,
+    growth_rate, target_margin, sales_to_cap, cost_of_capital
+)
 confidence = confidence_label(stock_data.get("data_source", "demo"), consistency_score)
-margin_variance = abs(float(target_margin) - float(stock_data["operating_margin"]))
-growth_variance = abs(float(growth_rate) - float(stock_data["revenue_growth_1y"]))
-alignment_index = max(10, 100 - int((margin_variance * 150) + (growth_variance * 150)))
+margin_var  = abs(float(target_margin) - float(stock_data["operating_margin"]))
+growth_var  = abs(float(growth_rate)   - float(stock_data["revenue_growth_1y"]))
+alignment_index = max(10, 100 - int((margin_var * 150) + (growth_var * 150)))
 
+# ─────────────────────────────────────────────
+# 12. NARRATIVE ALIGNMENT PANEL
+# ─────────────────────────────────────────────
 col_left, col_right = st.columns([1.1, 0.9])
+
 with col_left:
     st.subheader("📖 Narrative Alignment & Story Consistency")
-    c_score_col, c_align_col = st.columns(2)
-    with c_score_col:
-        st.markdown(f"<div class='score-card'><div style='font-size: 11px; text-transform: uppercase; opacity: 0.8;'>Story Coherence Index</div><div style='font-size: 42px; font-weight: 800; color: #38bdf8;'>{consistency_score}%</div><div style='font-size: 11px; opacity: 0.8; margin-top: 4px;'>Narrative logical consistency</div></div>", unsafe_allow_html=True)
-    with c_align_col:
-        st.markdown(f"<div class='score-card' style='background: linear-gradient(135deg, #334155, #1e293b);'><div style='font-size: 11px; text-transform: uppercase; opacity: 0.8;'>Assumption Alignment Index</div><div style='font-size: 42px; font-weight: 800; color: #34d399;'>{alignment_index}%</div><div style='font-size: 11px; opacity: 0.8; margin-top: 4px;'>Proximity to current fundamentals</div></div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='small-note'>Confidence: <strong>{confidence}</strong>.</div>", unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(
+            f"<div class='score-card'>"
+            f"<div style='font-size:11px;text-transform:uppercase;opacity:.8;'>Story Coherence Index</div>"
+            f"<div style='font-size:42px;font-weight:800;color:#38bdf8;'>{consistency_score}%</div>"
+            f"<div style='font-size:11px;opacity:.8;margin-top:4px;'>Narrative logical consistency</div>"
+            f"</div>", unsafe_allow_html=True
+        )
+    with c2:
+        st.markdown(
+            f"<div class='score-card'>"
+            f"<div style='font-size:11px;text-transform:uppercase;opacity:.8;'>Assumption Alignment Index</div>"
+            f"<div style='font-size:42px;font-weight:800;color:#34d399;'>{alignment_index}%</div>"
+            f"<div style='font-size:11px;opacity:.8;margin-top:4px;'>Proximity to current fundamentals</div>"
+            f"</div>", unsafe_allow_html=True
+        )
+
+    st.markdown(f"<div class='small-note'>Confidence level: <strong>{confidence}</strong> | Tax rate: {tax_rate_input*100:.0f}% | Terminal growth: {terminal_growth_input*100:.1f}% | Terminal WACC: {dcf_result['terminal_wacc']*100:.1f}%</div>", unsafe_allow_html=True)
+
     if consistency_score >= 85:
         st.markdown("<div class='success-box'>✅ Strong narrative support. The selected story is broadly consistent with the numbers.</div>", unsafe_allow_html=True)
     elif consistency_score >= 60:
-        st.markdown("<div class='info-box'>ℹ️ Mixed support. The story mostly works, but one or two assumptions deserve caution.</div>", unsafe_allow_html=True)
+        st.markdown("<div class='info-box'>ℹ️ Mixed support. The story mostly works but one or two assumptions deserve caution.</div>", unsafe_allow_html=True)
     else:
         st.markdown("<div class='warning-box'>⚠️ Weak support. The story and the numbers are pulling in different directions.</div>", unsafe_allow_html=True)
+
     for critique in critiques:
-        st.markdown(f"<div class='warning-box'>{critique}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='warning-box'>⚠️ {critique}</div>", unsafe_allow_html=True)
+
     st.markdown("### 📊 Story vs. Implied Financial Inputs")
     comparison_df = pd.DataFrame({
-        "Narrative Component": ["TAM / Growth", "Moat / Pricing", "Reinvestment / CapEx", "Risk Profile"],
-        "Selected Story Option": [story_tam.split(" (")[0], story_moat.split(" (")[0], story_reinvestment.split(" (")[0], story_risk.split(" (")[0]],
-        "Implied Financial Preset": [f"{calc_growth*100:.1f}% Growth", f"{calc_margin*100:.1f}% Margin", f"{calc_sc:.1f} Sales-to-Capital", f"{calc_wacc*100:.1f}% WACC"],
-        "Your Fine-Tuned Value": [f"{growth_rate*100:.1f}% Growth", f"{target_margin*100:.1f}% Margin", f"{sales_to_cap:.1f} Sales-to-Capital", f"{cost_of_capital*100:.1f}% WACC"]
+        "Narrative Component":   ["TAM / Growth", "Moat / Pricing", "Reinvestment", "Risk Profile"],
+        "Selected Story":        [story_tam.split(" (")[0], story_moat.split(" (")[0],
+                                  story_reinvestment.split(" (")[0], story_risk.split(" (")[0]],
+        "Narrative Preset":      [f"{calc_growth*100:.1f}% Growth", f"{calc_margin*100:.1f}% Margin",
+                                  f"{calc_sc:.1f}x Sales/Capital", f"{calc_wacc*100:.1f}% WACC"],
+        "Your Fine-Tuned Value": [f"{growth_rate*100:.1f}% Growth", f"{target_margin*100:.1f}% Margin",
+                                  f"{sales_to_cap:.1f}x Sales/Capital", f"{cost_of_capital*100:.1f}% WACC"],
     })
     st.table(comparison_df)
 
+# ─────────────────────────────────────────────
+# 13. VALUATION OUTPUT PANEL
+# ─────────────────────────────────────────────
 with col_right:
     st.subheader("⚖️ Valuation Bridge & Outputs")
+
     cp = float(stock_data["current_price"])
-    price_pct_diff = ((intrinsic_value_per_share - cp) / cp) * 100 if cp and np.isfinite(intrinsic_value_per_share) else np.nan
-    delta_color = "#16a34a" if np.isfinite(price_pct_diff) and price_pct_diff >= 0 else "#dc2626"
+    price_pct_diff = ((intrinsic_ps - cp) / cp * 100
+                      if cp and np.isfinite(intrinsic_ps) else np.nan)
+    delta_color  = "#16a34a" if np.isfinite(price_pct_diff) and price_pct_diff >= 0 else "#dc2626"
     delta_symbol = "➕" if np.isfinite(price_pct_diff) and price_pct_diff >= 0 else "➖"
-    iv_display = f"${intrinsic_value_per_share:.2f}" if np.isfinite(intrinsic_value_per_share) else "N/A"
-    pdiff_display = f"{abs(price_pct_diff):.1f}%" if np.isfinite(price_pct_diff) else "N/A"
-    st.markdown(f"<div style='background-color: white; padding: 24px; border-radius: 12px; border: 1px solid #eef2f6; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.02);'><div style='font-size: 14px; text-transform: uppercase; color: #64748b; font-weight: 600;'>Implied Intrinsic Value Per Share</div><div style='font-size: 48px; font-weight: 800; color: #0f172a; margin: 8px 0;'>{iv_display}</div><div style='font-size: 16px; font-weight: 600; color: {delta_color};'>{delta_symbol} {pdiff_display} over / under current price of ${cp:.2f}</div></div>", unsafe_allow_html=True)
+    iv_display   = f"${intrinsic_ps:.2f}" if np.isfinite(intrinsic_ps) else "N/A"
+    pd_display   = f"{abs(price_pct_diff):.1f}%" if np.isfinite(price_pct_diff) else "N/A"
+
+    st.markdown(
+        f"<div style='background-color:white;padding:24px;border-radius:12px;"
+        f"border:1px solid #eef2f6;text-align:center;'>"
+        f"<div style='font-size:14px;text-transform:uppercase;color:#64748b;font-weight:600;'>Implied Intrinsic Value Per Share</div>"
+        f"<div style='font-size:48px;font-weight:800;color:#0f172a;margin:8px 0;'>{iv_display}</div>"
+        f"<div style='font-size:16px;font-weight:600;color:{delta_color};'>"
+        f"{delta_symbol} {pd_display} vs current price of ${cp:.2f}</div>"
+        f"</div>", unsafe_allow_html=True
+    )
+
     st.write("")
+
     if np.isfinite(tv_contribution):
         if tv_contribution > 80.0:
-            st.markdown(f"<div class='warning-box'>🚨 <strong>Terminal Value Domination Warning:</strong> Present value of terminal value is <strong>{tv_contribution:.1f}%</strong> of operating assets.</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='warning-box'>🚨 <strong>Terminal Value Domination:</strong> "
+                f"PV of terminal value is <strong>{tv_contribution:.1f}%</strong> of operating assets. "
+                f"Small changes in terminal WACC ({dcf_result['terminal_wacc']*100:.1f}%) or growth "
+                f"({terminal_growth_input*100:.1f}%) will swing valuation significantly.</div>",
+                unsafe_allow_html=True
+            )
         else:
-            st.markdown(f"<div class='info-box'>ℹ️ <strong>Stable Valuation Mix:</strong> Terminal value is <strong>{tv_contribution:.1f}%</strong> of operating assets.</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='info-box'>ℹ️ <strong>Stable Valuation Mix:</strong> "
+                f"Terminal value is <strong>{tv_contribution:.1f}%</strong> of operating assets. "
+                f"Healthy balance between stage 1-2 cash flows and terminal value.</div>",
+                unsafe_allow_html=True
+            )
     else:
-        st.markdown("<div class='warning-box'>🚨 Terminal value could not be computed safely because growth and discount assumptions are too close.</div>", unsafe_allow_html=True)
-    b_col1, b_col2 = st.columns(2)
-    with b_col1:
-        st.metric("Total Operating Assets", f"${operating_value/1e9:.2f}B" if np.isfinite(operating_value) else "N/A")
-    with b_col2:
-        st.metric("Strategic Treasury Holdings", f"${non_operating_assets_bytes/1e9:.2f}B")
+        st.markdown(
+            "<div class='warning-box'>🚨 Terminal value could not be computed — "
+            "growth and discount rate assumptions may be too close.</div>",
+            unsafe_allow_html=True
+        )
 
+    b1, b2 = st.columns(2)
+    with b1:
+        st.metric("Operating Assets",
+                  f"${operating_value/1e9:.2f}B" if np.isfinite(operating_value) else "N/A")
+    with b2:
+        st.metric("Strategic Holdings", f"${non_operating_assets/1e9:.2f}B")
+    with b1:
+        st.metric("Net Debt", f"${net_debt/1e9:.2f}B")
+    with b2:
+        st.metric("Equity Value",
+                  f"${equity_value/1e9:.2f}B" if np.isfinite(equity_value) else "N/A")
+
+# ─────────────────────────────────────────────
+# 14. CASHFLOW PROJECTION TABLE (all 10 years)
+# ─────────────────────────────────────────────
 st.markdown("---")
-st.subheader("🗓️ Multi-Stage Cashflow Projection")
-projection_df = pd.DataFrame({"Revenue ($B)": [v/1e9 for v in dcf_result["revenues"]], "Operating Margin": [f"{m*100:.1f}%" for m in dcf_result["margins"]], "Operating Profit ($B)": [e/1e9 for e in dcf_result["ebits"]], "Reinvestment ($B)": [r/1e9 for r in dcf_result["reinvestments"]], "FCFF ($B)": [f/1e9 for f in dcf_result["fcffs"]], "PV of Cashflow ($B)": [pv/1e9 for pv in dcf_result["pvs"]]}, index=[f"Year {y}" for y in dcf_result["years"]])
-st.dataframe(projection_df.style.format(precision=3), use_container_width=True)
+st.subheader("🗓️ Full 10-Year Multi-Stage Cashflow Projection")
+st.caption("Stage 1 (Years 1-5): High growth at selected rate. Stage 2 (Years 6-10): Linear deceleration to terminal growth.")
 
+rows = dcf_result["records"]
+proj_df = pd.DataFrame({
+    "Stage":               [f"{'High Growth' if r['stage']==1 else 'Deceleration'}" for r in rows],
+    "Growth Rate":         [f"{r['growth']*100:.1f}%" for r in rows],
+    "Revenue ($B)":        [r["revenue"]/1e9 for r in rows],
+    "Margin":              [f"{r['margin']*100:.1f}%" for r in rows],
+    "EBIT ($B)":           [r["ebit"]/1e9 for r in rows],
+    "Reinvestment ($B)":   [r["reinvestment"]/1e9 for r in rows],
+    "FCFF ($B)":           [r["fcff"]/1e9 for r in rows],
+    "WACC":                [f"{r['wacc']*100:.1f}%" for r in rows],
+    "PV of FCFF ($B)":     [r["pv"]/1e9 for r in rows],
+}, index=[f"Year {r['year']}" for r in rows])
+
+st.dataframe(proj_df.style.format(precision=3), use_container_width=True)
+
+# Terminal value summary row
+tv_display = f"${dcf_result['terminal_value']/1e9:.2f}B" if np.isfinite(dcf_result['terminal_value']) else "N/A"
+pv_tv_display = f"${pv_tv/1e9:.2f}B" if np.isfinite(pv_tv) else "N/A"
+st.caption(
+    f"Terminal Value (Year 10+): **{tv_display}** gross  |  "
+    f"PV of Terminal Value: **{pv_tv_display}**  |  "
+    f"Terminal WACC: **{dcf_result['terminal_wacc']*100:.1f}%**  |  "
+    f"Terminal Growth: **{terminal_growth_input*100:.1f}%**"
+)
+
+# ─────────────────────────────────────────────
+# 15. CHARTS
+# ─────────────────────────────────────────────
 st.markdown("---")
 chart_col1, chart_col2 = st.columns(2)
+
 with chart_col1:
     st.subheader("📊 Intrinsic Value Bridge")
-    cumulative_pvs = float(np.nansum(dcf_result["pvs"]))
-    pv_tv = float(pv_terminal) if np.isfinite(pv_terminal) else 0.0
-    fig_waterfall = go.Figure(go.Waterfall(name="Value Bridge", orientation="v", measure=["relative", "relative", "total", "relative", "relative", "total"], x=["PV of 5Yr FCFF", "PV of Terminal Value", "Operating Assets", "Non-Operating Assets", "Less Net Debt", "Common Equity Value"], text=[f"${cumulative_pvs/1e9:.2f}B", f"${pv_tv/1e9:.2f}B", f"${(operating_value/1e9):.2f}B" if np.isfinite(operating_value) else "N/A", f"${non_operating_assets_bytes/1e9:.2f}B", f"${-net_debt/1e9:.2f}B", f"${equity_value/1e9:.2f}B" if np.isfinite(equity_value) else "N/A"], y=[cumulative_pvs/1e9, pv_tv/1e9, 0, non_operating_assets_bytes/1e9, -net_debt/1e9, 0], connector={"line": {"color": "rgb(63, 63, 63)"}}))
-    fig_waterfall.update_layout(showlegend=False, yaxis_title="$ Billions")
-    st.plotly_chart(fig_waterfall, use_container_width=True)
-    st.caption("This bridge shows how the story becomes operating value, then equity value.")
-with chart_col2:
-    st.subheader("🎲 Probable Value (Instant Monte Carlo)")
-    sim_prices = run_vectorized_monte_carlo(stock_data["revenue_ttm"], stock_data["operating_margin"], target_margin, growth_rate, sales_to_cap, cost_of_capital, shares_out, net_debt, non_operating_assets_bytes, n_sim=2000)
-    if len(sim_prices) > 0:
-        p10, p50, p90 = np.percentile(sim_prices, [10, 50, 90])
-        undervalued_prob = (sim_prices > cp).mean() * 100 if cp else 0
-        st.markdown(f"🎯 **Median Simulated Value:** `${p50:.2f}` per share")
-        st.markdown(f"🛡️ **Conservative case (10th percentile):** `${p10:.2f}` | **Optimistic case (90th percentile):** `${p90:.2f}`")
-        fig_dist = px.histogram(sim_prices, nbins=50, color_discrete_sequence=['#0284c7'])
-        fig_dist.add_vline(x=cp, line_dash="dash", line_color="red", annotation_text="Current Market Price")
-        fig_dist.update_layout(showlegend=False)
-        st.plotly_chart(fig_dist, use_container_width=True)
-        st.caption("This distribution shows the range of likely values if the story changes a little.")
-    else:
-        undervalued_prob = 0
-        st.warning("Monte Carlo simulation could not produce valid outputs.")
+    sum_pv_s1  = sum(r["pv"] for r in rows if r["stage"] == 1)
+    sum_pv_s2  = sum(r["pv"] for r in rows if r["stage"] == 2)
+    pv_tv_plot = float(pv_tv) if np.isfinite(pv_tv) else 0.0
 
-st.markdown("---")
-st.subheader("⚖️ Damodaran's Triad Check: Possible, Plausible, and Probable")
-st.caption("A good story should be mathematically possible, economically plausible, and probabilistically supportable.")
-t_col1, t_col2, t_col3 = st.columns(3)
-with t_col1:
-    st.markdown("### 🛠️ Possible")
-    if target_margin < 0.80 and cost_of_capital > 0.035:
-        st.success("✅ Passed mathematical feasibility")
-        st.markdown("* Target margin is below 80% and WACC is above a practical lower bound.")
+    fig_wf = go.Figure(go.Waterfall(
+        orientation="v",
+        measure=["relative", "relative", "relative", "total",
+                 "relative", "relative", "total"],
+        x=["PV Stage 1\n(Yr 1-5)", "PV Stage 2\n(Yr 6-10)", "PV Terminal\nValue",
+           "Operating\nAssets", "Strategic\nHoldings", "Less\nNet Debt", "Equity\nValue"],
+        text=[f"${sum_pv_s1/1e9:.2f}B", f"${sum_pv_s2/1e9:.2f}B", f"${pv_tv_plot/1e9:.2f}B",
+              f"${operating_value/1e9:.2f}B" if np.isfinite(operating_value) else "N/A",
+              f"${non_operating_assets/1e9:.2f}B", f"${-net_debt/1e9:.2f}B",
+              f"${equity_value/1e9:.2f}B" if np.isfinite(equity_value) else "N/A"],
+        y=[sum_pv_s1/1e9, sum_pv_s2/1e9, pv_tv_plot/1e9, 0,
+           non_operating_assets/1e9, -net_debt/1e9, 0],
+        connector={"line": {"color": "rgb(100,100,100)"}},
+    ))
+    fig_wf.update_layout(showlegend=False, yaxis_title="$ Billions",
+                         margin=dict(t=30, b=20, l=20, r=20))
+    st.plotly_chart(fig_wf, use_container_width=True)
+    st.caption("Three-stage bridge: stage 1 cash flows + stage 2 transition + terminal value = operating assets → equity.")
+
+with chart_col2:
+    st.subheader("🎲 Probable Value — Monte Carlo (2,000 runs)")
+    sim_prices = run_vectorized_monte_carlo(
+        rev_0=stock_data["revenue_ttm"],
+        margin_0=stock_data["operating_margin"],
+        target_margin_base=target_margin,
+        growth_base=growth_rate,
+        sc_ratio=sales_to_cap,
+        wacc_base=cost_of_capital,
+        shares=shares_out,
+        net_debt=net_debt,
+        non_op=non_operating_assets,
+        terminal_growth_base=terminal_growth_input,
+        tax_rate=tax_rate_input,
+        n_sim=2000
+    )
+    if len(sim_prices) > 10:
+        p10, p50, p90 = np.percentile(sim_prices, [10, 50, 90])
+        undervalued_prob = float((sim_prices > cp).mean() * 100) if cp else 0.0
+
+        st.markdown(f"🎯 **Median simulated value:** `${p50:.2f}` per share")
+        st.markdown(
+            f"🛡️ **Conservative (10th pct):** `${p10:.2f}`  |  "
+            f"**Optimistic (90th pct):** `${p90:.2f}`"
+        )
+
+        fig_hist = px.histogram(sim_prices, nbins=60, color_discrete_sequence=["#0284c7"])
+        fig_hist.add_vline(x=cp, line_dash="dash", line_color="red",
+                           annotation_text="Current price")
+        fig_hist.add_vline(x=p50, line_dash="dot", line_color="green",
+                           annotation_text="Median")
+        fig_hist.update_layout(showlegend=False, margin=dict(t=30, b=20, l=20, r=20),
+                                xaxis_title="Simulated Share Price ($)",
+                                yaxis_title="Frequency")
+        st.plotly_chart(fig_hist, use_container_width=True)
+        st.caption(
+            "Each run samples growth, margin, and WACC from a normal distribution "
+            "centered on your inputs. Spread reflects narrative uncertainty."
+        )
     else:
-        st.error("❌ Mathematical boundary breach")
-        st.markdown("* Assumptions may violate corporate finance bounds.")
-with t_col2:
+        undervalued_prob = 0.0
+        st.warning("Monte Carlo could not produce valid outputs with these assumptions.")
+
+# ─────────────────────────────────────────────
+# 16. DAMODARAN TRIAD CHECK
+# ─────────────────────────────────────────────
+st.markdown("---")
+st.subheader("⚖️ Damodaran's Triad: Possible, Plausible, Probable")
+st.caption(
+    "Every good valuation must pass three tests: mathematically possible, "
+    "economically plausible against industry benchmarks, and probabilistically probable."
+)
+
+t1, t2, t3 = st.columns(3)
+
+with t1:
+    st.markdown("### 🛠️ Possible")
+    checks = []
+    if target_margin < 0.80:
+        checks.append("✅ Target margin below 80% maximum")
+    else:
+        checks.append("❌ Target margin exceeds realistic bounds")
+    if cost_of_capital > 0.035:
+        checks.append("✅ WACC above practical lower bound")
+    else:
+        checks.append("❌ WACC below practical lower bound")
+    if terminal_growth_input < cost_of_capital:
+        checks.append("✅ Terminal growth < WACC (Gordon model stable)")
+    else:
+        checks.append("❌ Terminal growth ≥ WACC — model is unstable")
+
+    all_pass = all(c.startswith("✅") for c in checks)
+    if all_pass:
+        st.success("✅ Passed mathematical feasibility")
+    else:
+        st.error("❌ One or more boundary conditions breached")
+    for c in checks:
+        st.markdown(f"* {c}")
+
+with t2:
     st.markdown("### ⚖️ Plausible")
     warnings = []
-    if abs(growth_rate - stock_data["revenue_growth_1y"]) > 0.25:
-        warnings.append(f"• Target growth ({growth_rate*100:.0f}%) is far from historical growth ({float(stock_data['revenue_growth_1y'])*100:.0f}%).")
+    if abs(growth_rate - float(stock_data["revenue_growth_1y"])) > 0.25:
+        warnings.append(
+            f"Target growth ({growth_rate*100:.0f}%) is far from "
+            f"historical growth ({float(stock_data['revenue_growth_1y'])*100:.0f}%)."
+        )
     if target_margin > (ind_avg_margin + 0.15):
-        warnings.append(f"• Target margin is far above industry average ({ind_avg_margin*100:.0f}%).")
+        warnings.append(
+            f"Target margin ({target_margin*100:.0f}%) is far above "
+            f"industry average ({ind_avg_margin*100:.0f}%)."
+        )
+    if sales_to_cap > (calc_sc * 2.5):
+        warnings.append(
+            f"Capital efficiency ({sales_to_cap:.1f}x) is significantly "
+            f"above the narrative preset ({calc_sc:.1f}x)."
+        )
     if not warnings:
         st.success("✅ Passed operational plausibility")
-        st.markdown("* Inputs remain within plausible benchmark ranges.")
+        st.markdown("* Inputs remain within plausible industry benchmark ranges.")
     else:
         st.warning("⚠️ Ambitious narrative alerts:")
         for w in warnings:
-            st.markdown(w)
-with t_col3:
+            st.markdown(f"* {w}")
+
+with t3:
     st.markdown("### 🎲 Probable")
-    if len(sim_prices) > 0:
+    if len(sim_prices) > 10:
         if undervalued_prob > 75:
-            st.success(f"🎯 High likelihood of undervaluation: {undervalued_prob:.1f}%")
+            st.success(f"🎯 High likelihood of undervaluation: **{undervalued_prob:.1f}%**")
+            st.markdown(
+                f"* {undervalued_prob:.1f}% of simulation runs yield "
+                f"a value above the current price of ${cp:.2f}."
+            )
         elif undervalued_prob >= 35:
-            st.info(f"⚖️ Balanced / fairly valued: {undervalued_prob:.1f}%")
+            st.info(f"⚖️ Balanced / fairly valued: **{undervalued_prob:.1f}%**")
+            st.markdown(
+                f"* {undervalued_prob:.1f}% of runs show upside. "
+                f"Market price is broadly consistent with this narrative."
+            )
         else:
-            st.error(f"🚨 High likelihood of overvaluation: {undervalued_prob:.1f}%")
+            st.error(f"🚨 High likelihood of overvaluation: **{undervalued_prob:.1f}%**")
+            st.markdown(
+                f"* Only {undervalued_prob:.1f}% of simulation runs yield "
+                f"a value above ${cp:.2f}. The narrative implies the stock is expensive."
+            )
+    else:
+        st.warning("Simulation failed. Adjust assumptions and retry.")
+
+# ─────────────────────────────────────────────
+# 17. SENSITIVITY TABLE
+# ─────────────────────────────────────────────
+st.markdown("---")
+st.subheader("📐 Sensitivity Analysis — Intrinsic Value per Share")
+st.caption(
+    "Each cell shows intrinsic value per share at a combination of WACC and terminal growth rate. "
+    "Your current assumptions are highlighted."
+)
+
+wacc_range  = [cost_of_capital - 0.02, cost_of_capital - 0.01, cost_of_capital,
+               cost_of_capital + 0.01, cost_of_capital + 0.02]
+tgrow_range = [terminal_growth_input - 0.01, terminal_growth_input,
+               terminal_growth_input + 0.005, terminal_growth_input + 0.01]
+wacc_range  = [float(np.clip(w, 0.04, 0.25)) for w in wacc_range]
+tgrow_range = [float(np.clip(g, 0.0,  0.05)) for g in tgrow_range]
+
+sens_data = {}
+for tg in tgrow_range:
+    col_vals = []
+    for wc in wacc_range:
+        iv = calculate_3stage_dcf(
+            rev_0=stock_data["revenue_ttm"],
+            margin_0=stock_data["operating_margin"],
+            target_margin=target_margin,
+            growth_high=growth_rate,
+            sc_ratio=sales_to_cap,
+            wacc_high=wc,
+            terminal_growth=tg,
+            tax_rate=tax_rate_input,
+            return_details=False
+        )
+        eq  = float(iv) - net_debt + non_operating_assets if np.isfinite(iv) else np.nan
+        ivs = max(0.0, eq / shares_out) if np.isfinite(eq) else np.nan
+        col_vals.append(f"${ivs:.2f}" if np.isfinite(ivs) else "N/A")
+    sens_data[f"TG={tg*100:.1f}%"] = col_vals
+
+sens_df = pd.DataFrame(
+    sens_data,
+    index=[f"WACC={w*100:.1f}%" for w in wacc_range]
+)
+st.dataframe(sens_df, use_container_width=True)
+st.caption(f"Current scenario: WACC={cost_of_capital*100:.1f}%, Terminal Growth={terminal_growth_input*100:.1f}% → **{iv_display}** per share")
