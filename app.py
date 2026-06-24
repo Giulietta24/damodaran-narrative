@@ -103,7 +103,99 @@ def load_damodaran_industry_data():
 # Tickers where reported P&L is structurally distorted by non-operating items
 # (Bitcoin mark-to-market, crypto gains/losses, etc.).
 # For these we use live price but force fundamentals from the curated profile.
-FUNDAMENTAL_OVERRIDE_TICKERS = {"MSTR", "COIN", "HOOD", "SMLR", "BTBT"}
+# Tickers with curated profiles where fundamentals are forced regardless of API data.
+# Only used as a last resort when auto-detection fails (see is_crypto_treasury() below).
+FUNDAMENTAL_OVERRIDE_TICKERS = {"MSTR"}
+
+# Crypto asset balance sheet labels yfinance may expose
+CRYPTO_BALANCE_SHEET_LABELS = [
+    "Digital Assets", "Cryptocurrencies", "Bitcoin", "Ethereum",
+    "Other Long Term Assets", "Other Non Current Assets",
+    "Long Term Investments", "Other Current Assets",
+]
+
+def is_crypto_treasury(info: dict, balance_sheet) -> tuple:
+    """
+    Auto-detects whether a ticker is a crypto treasury company whose reported
+    operating margin will be distorted by mark-to-market gains/losses.
+
+    Returns: (is_treasury: bool, crypto_value: float, crypto_label: str)
+
+    Detection logic:
+      1. Operating margin is wildly outside -40% to +80% bounds → likely distorted
+      2. Balance sheet has a crypto/digital asset line > 20% of total assets
+      3. Industry description contains 'bitcoin', 'ethereum', 'crypto', 'digital asset'
+
+    Any one condition being true flags the ticker as a crypto treasury.
+    """
+    crypto_value = 0.0
+    crypto_label = "unknown"
+
+    # Check 1: Operating margin distortion
+    op_margin = info.get("operatingMargins")
+    margin_distorted = isinstance(op_margin, (int, float)) and not (-0.40 <= float(op_margin) <= 0.80)
+
+    # Check 2: Crypto on balance sheet
+    bs_has_crypto = False
+    try:
+        if balance_sheet is not None and not balance_sheet.empty:
+            total_assets_row = [i for i in balance_sheet.index if "total assets" in str(i).lower()]
+            total_assets = float(balance_sheet.loc[total_assets_row[0]].iloc[0]) if total_assets_row else 0.0
+
+            for label in CRYPTO_BALANCE_SHEET_LABELS:
+                if label in balance_sheet.index:
+                    val = balance_sheet.loc[label].dropna()
+                    if not val.empty:
+                        v = float(val.iloc[0])
+                        if v > 500_000_000:  # >$500M suggests meaningful crypto holding
+                            # Only flag as treasury if crypto > 20% of total assets
+                            if total_assets > 0 and (v / total_assets) > 0.20:
+                                bs_has_crypto = True
+                                crypto_value = v
+                                crypto_label = label
+                                break
+                            elif total_assets == 0 and v > 1_000_000_000:
+                                # Can't compute ratio but value is large — flag anyway
+                                bs_has_crypto = True
+                                crypto_value = v
+                                crypto_label = label
+                                break
+    except Exception:
+        pass
+
+    # Check 3: Industry/description keywords
+    industry = str(info.get("industry", "")).lower()
+    long_biz = str(info.get("longBusinessSummary", "")).lower()
+    keyword_match = any(
+        kw in industry or kw in long_biz[:500]
+        for kw in ["bitcoin", "ethereum", "crypto", "digital asset", "blockchain treasury"]
+    )
+
+    is_treasury = margin_distorted or bs_has_crypto or keyword_match
+    return is_treasury, crypto_value, crypto_label
+
+@st.cache_data(ttl=60)
+def fetch_live_crypto_prices():
+    """
+    Fetches live BTC and ETH prices via yfinance.
+    Returns dict: {"BTC": float or None, "ETH": float or None}
+    Used for any crypto treasury company — MSTR, BMNR, or any future entrant.
+    """
+    prices = {"BTC": None, "ETH": None}
+    for symbol, key in [("BTC-USD", "BTC"), ("ETH-USD", "ETH")]:
+        try:
+            t = yf.Ticker(symbol)
+            price = t.fast_info.get("last_price")
+            if price and float(price) > 1:
+                prices[key] = float(price)
+            else:
+                hist = t.history(period="1d")
+                if not hist.empty:
+                    prices[key] = float(hist["Close"].iloc[-1])
+        except Exception:
+            pass
+    return prices
+
 
 @st.cache_data(ttl=60)
 def fetch_stock_data(ticker_symbol):
@@ -127,10 +219,18 @@ def fetch_stock_data(ticker_symbol):
                  "industry": "Software (System & Application)",
                  "revenue_ttm": 463_000_000, "operating_margin": 0.08, "net_margin": 0.05,
                  "debt_to_equity": 3.2, "current_price": 385.0, "market_cap": 75_000_000_000,
-                 "shares_outstanding": 195_000_000, "cash": 50_000_000, "total_debt": 8_200_000_000,
-                 "revenue_growth_1y": -0.05, "non_operating_assets": 42_000_000_000,
-                 "price_as_of": "Jun 2025", "data_source": "fallback",
-                 "override_note": "Fundamentals use curated profile — reported P&L distorted by Bitcoin mark-to-market. Live price fetched separately."},
+                 # UPDATED Jun 2026: shares ~294M (was 195M — MSTR has aggressively
+                 # issued shares to fund Bitcoin purchases throughout 2024-2025)
+                 "shares_outstanding": 294_000_000,
+                 "cash": 50_000_000, "total_debt": 8_200_000_000,
+                 "revenue_growth_1y": -0.05,
+                 # BTC holdings as of Q1 2026 filings: 713,502 BTC
+                 # non_operating_assets is overridden dynamically with live BTC price
+                 # Fallback: 713,502 × $62,000 = ~$44.2B
+                 "non_operating_assets": 44_200_000_000,
+                 "btc_holdings": 713_502,
+                 "price_as_of": "Jun 2026", "data_source": "fallback",
+                 "override_note": "Fundamentals use curated profile — P&L distorted by Bitcoin mark-to-market. Bitcoin treasury value computed live from BTC-USD price × 713,502 BTC held."},
         "NVDA": {"company_name": "NVIDIA Corp.", "sector": "Technology", "industry": "Semiconductor",
                  "revenue_ttm": 130_000_000_000, "operating_margin": 0.62, "net_margin": 0.55,
                  "debt_to_equity": 0.20, "current_price": 131.0, "market_cap": 3_210_000_000_000,
@@ -143,8 +243,30 @@ def fetch_stock_data(ticker_symbol):
                  "debt_to_equity": 0.45, "current_price": 260.0, "market_cap": 66_000_000_000,
                  "shares_outstanding": 254_000_000, "cash": 7_200_000_000, "total_debt": 4_200_000_000,
                  "revenue_growth_1y": 1.10, "non_operating_assets": 1_200_000_000,
-                 "price_as_of": "Jun 2025", "data_source": "fallback",
-                 "override_note": "Fundamentals use curated profile — reported P&L distorted by crypto asset gains/losses."},
+                 "price_as_of": "Jun 2025", "data_source": "fallback", "override_note": ""},
+        # BMNR — Bitmine Immersion Technologies
+        # World's largest ETH treasury (#1 globally) + small BTC holding.
+        # P&L is completely dominated by ETH mark-to-market — auto-detection will catch this.
+        # Curated profile provides stable operating fundamentals for DCF.
+        # eth_holdings and btc_holdings trigger live price calculation in the override block.
+        "BMNR": {"company_name": "Bitmine Immersion Technologies (BMNR)",
+                 "sector": "Technology", "industry": "Financial Svcs. (Non-bank)",
+                 # Core business revenue is tiny — staking fees + mining (~$230M projected)
+                 "revenue_ttm": 150_000_000, "operating_margin": 0.05, "net_margin": 0.03,
+                 "debt_to_equity": 0.30, "current_price": 14.25, "market_cap": 7_700_000_000,
+                 # Jun 2026: 537.63M shares outstanding (CNBC data)
+                 "shares_outstanding": 537_630_000,
+                 "cash": 500_000_000, "total_debt": 800_000_000,
+                 "revenue_growth_1y": 2.0,  # growing rapidly via new staking revenue
+                 # ETH holdings: 5,620,754 ETH as of Jun 14 2026
+                 # BTC holdings: 204 BTC as of Jun 14 2026 (trivial)
+                 # non_operating_assets overridden dynamically via eth_holdings x live ETH price
+                 "non_operating_assets": 9_657_455_172,  # 5.62M ETH x $1,718 fallback
+                 "eth_holdings": 5_620_754,
+                 "btc_holdings": 204,
+                 "price_as_of": "Jun 2026",
+                 "data_source": "fallback",
+                 "override_note": "Largest ETH treasury globally. P&L distorted by ETH mark-to-market. Treasury value computed live from ETH price x 5,620,754 ETH + BTC holdings."},
     }
 
     try:
@@ -158,15 +280,91 @@ def fetch_stock_data(ticker_symbol):
         if live_price is None:
             raise ValueError("No live price available")
 
-        # ── Fundamental override for crypto-distorted P&L tickers ────────
-        # Use live price but keep curated fundamentals so DCF inputs are meaningful
-        if ticker_symbol in FUNDAMENTAL_OVERRIDE_TICKERS and ticker_symbol in profiles:
-            p = profiles[ticker_symbol].copy()
-            p["ticker"]       = ticker_symbol
+        # ── Step 1: Fetch balance sheet early — needed for auto-detection ─
+        try:
+            bs = ticker.balance_sheet
+        except Exception:
+            bs = None
+
+        # ── Step 2: Auto-detect crypto treasury companies ────────────────
+        # Works for ANY ticker — MSTR, BMNR, future entrants — no hardcoding needed.
+        # Falls back to curated profile override only for known tickers.
+        live_shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
+        is_treasury, bs_crypto_value, bs_crypto_label = is_crypto_treasury(info, bs)
+
+        if is_treasury:
+            # Use curated profile if available, otherwise build a generic shell
+            if ticker_symbol in profiles:
+                p = profiles[ticker_symbol].copy()
+            else:
+                # Generic crypto treasury shell for unknown tickers (e.g. BMNR)
+                # Operating fundamentals will be minimal — the value is in the crypto treasury
+                p = {
+                    "company_name":        info.get("longName", info.get("shortName", f"{ticker_symbol} Corp")),
+                    "sector":              info.get("sector", "Technology"),
+                    "industry":            info.get("industry", "Financial Svcs. (Non-bank)"),
+                    "revenue_ttm":         info.get("totalRevenue") or 100_000_000,
+                    "operating_margin":    0.05,   # placeholder — distorted by crypto
+                    "net_margin":          0.03,
+                    "debt_to_equity":      (float(info.get("debtToEquity", 50)) / 100.0),
+                    "current_price":       float(live_price),
+                    "market_cap":          info.get("marketCap") or 0,
+                    "shares_outstanding":  float(live_shares) if live_shares else 100_000_000,
+                    "cash":                info.get("totalCash") or 0.0,
+                    "total_debt":          info.get("totalDebt") or 0.0,
+                    "revenue_growth_1y":   0.10,
+                    "non_operating_assets": 0.0,
+                    "price_as_of":         "live",
+                    "data_source":         "auto_detected_crypto_treasury",
+                    "override_note":       f"Auto-detected as crypto treasury company. P&L margins are unreliable due to crypto mark-to-market accounting. Crypto asset value computed from balance sheet or live prices.",
+                }
+
+            p["ticker"]        = ticker_symbol
             p["current_price"] = float(live_price)
-            p["market_cap"]   = p["shares_outstanding"] * float(live_price)
-            p["price_as_of"]  = "live"
-            p["data_source"]  = "live_price_fundamental_override"
+            p["price_as_of"]   = "live"
+            p["data_source"]   = p.get("data_source", "auto_detected_crypto_treasury")
+
+            # Always use live shares — not distorted by crypto accounting
+            if live_shares and float(live_shares) > 1_000_000:
+                p["shares_outstanding"] = float(live_shares)
+            p["market_cap"] = p["shares_outstanding"] * float(live_price)
+
+            # ── Crypto treasury value — 3-tier approach ──────────────────
+            # Tier 1: Balance sheet direct read (best — auto-updates with purchases)
+            # Tier 2: Hardcoded holdings x live price (semi-auto — price live, count stale)
+            # Tier 3: Hardcoded profile value (last resort)
+            crypto_prices = fetch_live_crypto_prices()
+            crypto_treasury = None
+            crypto_source   = "unknown"
+
+            # Tier 1: balance sheet already parsed above
+            if bs_crypto_value > 500_000_000:
+                crypto_treasury = bs_crypto_value
+                crypto_source   = f"balance sheet ({bs_crypto_label})"
+
+            # Tier 2: hardcoded holdings x live price (for known profiles only)
+            if crypto_treasury is None and "btc_holdings" in p and crypto_prices["BTC"]:
+                crypto_treasury = p["btc_holdings"] * crypto_prices["BTC"]
+                crypto_source   = f"profile: {p['btc_holdings']:,} BTC x ${crypto_prices['BTC']:,.0f}"
+
+            if crypto_treasury is None and "eth_holdings" in p and crypto_prices["ETH"]:
+                crypto_treasury = p["eth_holdings"] * crypto_prices["ETH"]
+                crypto_source   = f"profile: {p['eth_holdings']:,} ETH x ${crypto_prices['ETH']:,.0f}"
+
+            # Tier 3: keep whatever was in the profile as last resort
+            if crypto_treasury is None:
+                crypto_treasury = p.get("non_operating_assets", 0.0)
+                crypto_source   = "stale profile value — update holdings count manually"
+
+            p["non_operating_assets"] = crypto_treasury
+            prices_str = f"BTC=${crypto_prices['BTC']:,.0f}" if crypto_prices["BTC"] else ""
+            if crypto_prices["ETH"]:
+                prices_str += f" | ETH=${crypto_prices['ETH']:,.0f}"
+            p["override_note"] = (
+                f"Crypto treasury detected. P&L margins use {'curated profile' if ticker_symbol in profiles else 'auto-generated shell'}. "
+                f"Treasury value: ${crypto_treasury/1e9:.2f}B (source: {crypto_source}). "
+                f"Live prices: {prices_str}."
+            )
             return p, True
 
         # ── Sanitization helpers (clean pattern from community version) ───
