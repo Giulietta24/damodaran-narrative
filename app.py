@@ -99,10 +99,17 @@ def load_damodaran_industry_data():
 # ─────────────────────────────────────────────
 # 4. STOCK DATA FETCH
 # ─────────────────────────────────────────────
+
+# Tickers where reported P&L is structurally distorted by non-operating items
+# (Bitcoin mark-to-market, crypto gains/losses, etc.).
+# For these we use live price but force fundamentals from the curated profile.
+FUNDAMENTAL_OVERRIDE_TICKERS = {"MSTR", "COIN", "HOOD", "SMLR", "BTBT"}
+
 @st.cache_data(ttl=60)
 def fetch_stock_data(ticker_symbol):
     ticker_symbol = ticker_symbol.upper().strip()
-    # Fallback profiles — prices tagged with date for transparency
+
+    # Curated fallback profiles — prices updated Jun 2025
     profiles = {
         "AAPL": {"company_name": "Apple Inc.", "sector": "Technology", "industry": "Technology Hardware",
                  "revenue_ttm": 391_000_000_000, "operating_margin": 0.307, "net_margin": 0.263,
@@ -116,40 +123,84 @@ def fetch_stock_data(ticker_symbol):
                  "shares_outstanding": 3_200_000_000, "cash": 26_800_000_000, "total_debt": 9_500_000_000,
                  "revenue_growth_1y": 0.01, "non_operating_assets": 5_400_000_000,
                  "price_as_of": "Jun 2025", "data_source": "fallback"},
-        "MSTR": {"company_name": "MicroStrategy Inc.", "sector": "Technology",
+        "MSTR": {"company_name": "Strategy Inc. (MSTR)", "sector": "Technology",
                  "industry": "Software (System & Application)",
-                 "revenue_ttm": 496_000_000, "operating_margin": 0.10, "net_margin": 0.05,
+                 "revenue_ttm": 463_000_000, "operating_margin": 0.08, "net_margin": 0.05,
                  "debt_to_equity": 3.2, "current_price": 385.0, "market_cap": 75_000_000_000,
-                 "shares_outstanding": 195_000_000, "cash": 50_000_000, "total_debt": 6_200_000_000,
-                 "revenue_growth_1y": -0.02, "non_operating_assets": 42_000_000_000,
-                 "price_as_of": "Jun 2025", "data_source": "fallback"},
+                 "shares_outstanding": 195_000_000, "cash": 50_000_000, "total_debt": 8_200_000_000,
+                 "revenue_growth_1y": -0.05, "non_operating_assets": 42_000_000_000,
+                 "price_as_of": "Jun 2025", "data_source": "fallback",
+                 "override_note": "Fundamentals use curated profile — reported P&L distorted by Bitcoin mark-to-market. Live price fetched separately."},
         "NVDA": {"company_name": "NVIDIA Corp.", "sector": "Technology", "industry": "Semiconductor",
                  "revenue_ttm": 130_000_000_000, "operating_margin": 0.62, "net_margin": 0.55,
                  "debt_to_equity": 0.20, "current_price": 131.0, "market_cap": 3_210_000_000_000,
                  "shares_outstanding": 24_500_000_000, "cash": 25_000_000_000, "total_debt": 11_000_000_000,
                  "revenue_growth_1y": 1.22, "non_operating_assets": 15_000_000_000,
                  "price_as_of": "Jun 2025", "data_source": "fallback"},
+        "COIN": {"company_name": "Coinbase Global Inc.", "sector": "Financial Services",
+                 "industry": "Financial Svcs. (Non-bank & Insurance)",
+                 "revenue_ttm": 6_600_000_000, "operating_margin": 0.22, "net_margin": 0.18,
+                 "debt_to_equity": 0.45, "current_price": 260.0, "market_cap": 66_000_000_000,
+                 "shares_outstanding": 254_000_000, "cash": 7_200_000_000, "total_debt": 4_200_000_000,
+                 "revenue_growth_1y": 1.10, "non_operating_assets": 1_200_000_000,
+                 "price_as_of": "Jun 2025", "data_source": "fallback",
+                 "override_note": "Fundamentals use curated profile — reported P&L distorted by crypto asset gains/losses."},
     }
+
     try:
         ticker = yf.Ticker(ticker_symbol)
-        info = ticker.info or {}
+        info   = ticker.info or {}
         if not info:
             raise ValueError("No info returned")
+
         live_price = (info.get("currentPrice") or info.get("regularMarketPrice")
                       or info.get("previousClose"))
         if live_price is None:
-            raise ValueError("No live price")
+            raise ValueError("No live price available")
 
+        # ── Fundamental override for crypto-distorted P&L tickers ────────
+        # Use live price but keep curated fundamentals so DCF inputs are meaningful
+        if ticker_symbol in FUNDAMENTAL_OVERRIDE_TICKERS and ticker_symbol in profiles:
+            p = profiles[ticker_symbol].copy()
+            p["ticker"]       = ticker_symbol
+            p["current_price"] = float(live_price)
+            p["market_cap"]   = p["shares_outstanding"] * float(live_price)
+            p["price_as_of"]  = "live"
+            p["data_source"]  = "live_price_fundamental_override"
+            return p, True
+
+        # ── Standard live fetch ───────────────────────────────────────────
         shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding") or 0
-        cash  = info.get("totalCash") or 0.0
-        debt  = info.get("totalDebt") or 0.0
+        cash   = info.get("totalCash") or 0.0
+        debt   = info.get("totalDebt") or 0.0
 
-        # Revenue growth — prefer Y-o-Y from financials, fall back to reported revenueGrowth
+        # Operating margin — clamp to sane range; distorted values (e.g. -116x)
+        # are caused by crypto/unrealised gains flowing through GAAP operating income
+        raw_op_margin = info.get("operatingMargins")
+        profile_base  = profiles.get(ticker_symbol, {})
+        if isinstance(raw_op_margin, (int, float)) and -2.0 < float(raw_op_margin) < 2.0:
+            operating_margin = float(raw_op_margin)
+        else:
+            # Fall back to profile value; if not in profile, use a conservative default
+            operating_margin = profile_base.get("operating_margin", 0.10)
+            if raw_op_margin is not None:
+                st.sidebar.caption(
+                    f"⚠️ Reported operating margin ({raw_op_margin:.1f}) looks corrupted "
+                    f"(possibly includes unrealised asset gains). Using fallback: {operating_margin*100:.1f}%"
+                )
+
+        # Net margin — same sanity check
+        raw_net_margin = info.get("profitMargins")
+        if isinstance(raw_net_margin, (int, float)) and -2.0 < float(raw_net_margin) < 2.0:
+            net_margin = float(raw_net_margin)
+        else:
+            net_margin = profile_base.get("net_margin", 0.08)
+
+        # Revenue growth — prefer Y-o-Y from financials, fall back to reported field
         rev_growth = None
         try:
             fin = ticker.financials
             if fin is not None and not fin.empty:
-                # FIX: was rev_row[0], correct variable is revenue_rows
                 revenue_rows = [
                     idx for idx in fin.index
                     if any(x in str(idx).lower() for x in ["revenue", "sales", "turnover"])
@@ -160,17 +211,18 @@ def fetch_stock_data(ticker_symbol):
                         calc = float(
                             (rev_series.iloc[0] - rev_series.iloc[1]) / rev_series.iloc[1]
                         )
-                        if -0.9 < calc < 5.0:
+                        # Clamp: >200% or <-90% is almost certainly data corruption
+                        if -0.90 < calc < 3.0:
                             rev_growth = calc
         except Exception:
             pass
 
         if rev_growth is None:
             rg = info.get("revenueGrowth")
-            if isinstance(rg, (int, float)) and -0.9 < rg < 5.0:
+            if isinstance(rg, (int, float)) and -0.90 < float(rg) < 3.0:
                 rev_growth = float(rg)
         if rev_growth is None:
-            rev_growth = 0.10
+            rev_growth = profile_base.get("revenue_growth_1y", 0.10)
 
         # Non-operating assets from balance sheet
         non_op = 0.0
@@ -186,39 +238,42 @@ def fetch_stock_data(ticker_symbol):
         except Exception:
             pass
 
-        profile_base = profiles.get(ticker_symbol, {})
         d_to_e = info.get("debtToEquity")
         data = {
-            "ticker":              ticker_symbol,
-            "company_name":        info.get("longName", info.get("shortName",
-                                       profile_base.get("company_name", f"{ticker_symbol} Corp"))),
-            "sector":              info.get("sector",    profile_base.get("sector", "Other")),
-            "industry":            info.get("industry",  profile_base.get("industry", "Other")),
-            "revenue_ttm":         info.get("totalRevenue") or profile_base.get("revenue_ttm", 1_000_000_000),
-            "operating_margin":    info.get("operatingMargins") if info.get("operatingMargins") is not None
-                                   else profile_base.get("operating_margin", 0.12),
-            "net_margin":          info.get("profitMargins") if info.get("profitMargins") is not None
-                                   else profile_base.get("net_margin", 0.08),
-            "debt_to_equity":      (float(d_to_e) / 100.0) if isinstance(d_to_e, (int, float))
-                                   else profile_base.get("debt_to_equity", 0.5),
-            "current_price":       float(live_price),
-            "market_cap":          info.get("marketCap") or
-                                   (shares * float(live_price) if shares else profile_base.get("market_cap", 0)),
-            "shares_outstanding":  shares if shares else profile_base.get("shares_outstanding", 10_000_000),
-            "cash":                cash if cash > 0 else profile_base.get("cash", 0.0),
-            "total_debt":          debt if debt > 0 else profile_base.get("total_debt", 0.0),
-            "revenue_growth_1y":   rev_growth,
+            "ticker":               ticker_symbol,
+            "company_name":         info.get("longName", info.get("shortName",
+                                        profile_base.get("company_name", f"{ticker_symbol} Corp"))),
+            "sector":               info.get("sector",   profile_base.get("sector", "Other")),
+            "industry":             info.get("industry", profile_base.get("industry", "Other")),
+            "revenue_ttm":          info.get("totalRevenue") or profile_base.get("revenue_ttm", 1_000_000_000),
+            "operating_margin":     operating_margin,
+            "net_margin":           net_margin,
+            "debt_to_equity":       (float(d_to_e) / 100.0) if isinstance(d_to_e, (int, float))
+                                    else profile_base.get("debt_to_equity", 0.5),
+            "current_price":        float(live_price),
+            "market_cap":           info.get("marketCap") or
+                                    (shares * float(live_price) if shares else profile_base.get("market_cap", 0)),
+            "shares_outstanding":   shares if shares else profile_base.get("shares_outstanding", 10_000_000),
+            "cash":                 cash if cash > 0 else profile_base.get("cash", 0.0),
+            "total_debt":           debt if debt > 0 else profile_base.get("total_debt", 0.0),
+            "revenue_growth_1y":    rev_growth,
             "non_operating_assets": non_op if non_op > 0 else profile_base.get("non_operating_assets", 0.0),
-            "price_as_of":         "live",
-            "data_source":         "live",
+            "price_as_of":          "live",
+            "data_source":          "live",
+            "override_note":        "",
         }
         return data, True
+
     except Exception:
+        # Full fallback to curated profile
         if ticker_symbol in profiles:
             p = profiles[ticker_symbol].copy()
-            p["ticker"] = ticker_symbol
+            p["ticker"]     = ticker_symbol
             p["market_cap"] = p["shares_outstanding"] * p["current_price"]
+            if "override_note" not in p:
+                p["override_note"] = ""
             return p, True
+
         generic = {
             "ticker": ticker_symbol, "company_name": f"{ticker_symbol} Enterprise",
             "sector": "Industrial Tech", "industry": "Software (System & Application)",
@@ -226,7 +281,7 @@ def fetch_stock_data(ticker_symbol):
             "debt_to_equity": 0.40, "current_price": 50.0, "market_cap": 5_000_000_000,
             "shares_outstanding": 100_000_000, "cash": 300_000_000, "total_debt": 150_000_000,
             "revenue_growth_1y": 0.12, "non_operating_assets": 50_000_000,
-            "price_as_of": "demo", "data_source": "demo",
+            "price_as_of": "demo", "data_source": "demo", "override_note": "",
         }
         return generic, False
 
@@ -599,6 +654,11 @@ st.caption(
     f"Sector: {stock_data['sector']}  |  Industry: {stock_data['industry']}  |  "
     f"Data: {stock_data.get('data_source','live')}{price_tag}"
 )
+
+# Show override warning prominently for crypto-distorted tickers
+override_note = stock_data.get("override_note", "")
+if override_note:
+    st.warning(f"⚠️ **Fundamental Data Notice:** {override_note}")
 
 m1, m2, m3, m4 = st.columns(4)
 with m1:
