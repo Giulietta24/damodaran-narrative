@@ -753,6 +753,41 @@ damodaran_df = load_damodaran_industry_data()
 if not api_success:
     st.sidebar.warning(f"⚠️ Yahoo Finance lookup failed. Using generic fallback for '{ticker_input}'.")
 
+# ── Live price override — separate fast fetch, not cached ────────────────
+# fetch_stock_data is cached for 60s for fundamentals (expensive to fetch).
+# Price can go stale in that window. This separate call always fetches live
+# price and overwrites whatever the cached fundamentals returned.
+# This is why RKLB was showing $50 (generic fallback) and MSTR showing $385
+# (stale profile) — the main cache was not refreshing price independently.
+def _fetch_live_price_uncached(ticker: str):
+    """No cache — always fetches the freshest available price."""
+    try:
+        t = yf.Ticker(ticker)
+        price = t.fast_info.get("last_price")
+        if price and float(price) > 0.01:
+            return float(price)
+        price = t.fast_info.get("previous_close")
+        if price and float(price) > 0.01:
+            return float(price)
+        info = t.info or {}
+        price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+        if price:
+            return float(price)
+    except Exception:
+        pass
+    return None
+
+live_price_now = _fetch_live_price_uncached(ticker_input)
+if live_price_now:
+    if abs(live_price_now - stock_data["current_price"]) / max(stock_data["current_price"], 0.01) > 0.01:
+        # Price has moved more than 1% from what the cache has — update it
+        st.sidebar.caption(
+            f"📡 Price updated: ${stock_data['current_price']:.2f} → ${live_price_now:.2f} (cache was stale)"
+        )
+    stock_data["current_price"] = live_price_now
+    stock_data["market_cap"]    = stock_data["shares_outstanding"] * live_price_now
+    stock_data["price_as_of"]   = "live"
+
 ind_str = str(stock_data["industry"])
 industry_match = damodaran_df[
     damodaran_df["Industry"].astype(str).str.contains(ind_str, case=False, na=False, regex=False)
@@ -908,6 +943,34 @@ pv_tv           = dcf_result["pv_terminal_value"]
 tv_contribution = ((pv_tv / operating_value) * 100
                    if np.isfinite(operating_value) and operating_value > 0 and np.isfinite(pv_tv)
                    else np.nan)
+
+# ── Pre-profit / story-stock detection ────────────────────────────────────
+# Damodaran explicitly distinguishes "story stocks" from "numbers stocks".
+# Pre-profit companies with negative margins are valued on future inflection
+# points. A standard DCF undershoots because early negative FCFFs drag down
+# the PV sum before terminal value recovers. Examples: RKLB, ASTS, early TSLA.
+current_margin    = float(stock_data["operating_margin"])
+is_pre_profit     = current_margin < -0.05
+sum_s1_pv         = sum(r["pv"] for r in dcf_result["records"] if r["stage"] == "Stage 1")
+is_story_stock    = is_pre_profit and (sum_s1_pv < 0)
+
+if is_story_stock:
+    pv_tv_val = pv_tv if np.isfinite(pv_tv) else 0.0
+    growth_pct = f"{float(stock_data['revenue_growth_1y'])*100:.0f}%"
+    st.warning(
+        f"**Story Stock / Pre-Profit Company Detected — DCF Output Requires Interpretation** "
+        f"{stock_data['company_name']} currently has a **{current_margin*100:.1f}% operating margin** "
+        f"and is burning cash. In years 1-5, cumulative discounted FCFF is "
+        f"**${sum_s1_pv/1e9:.2f}B** (negative), which offsets terminal value of "
+        f"**${pv_tv_val/1e9:.2f}B**. This is why intrinsic value appears very low. "
+        f"This company's value sits in the future margin inflection point. "
+        f"Set Target Operating Margin to your long-run belief (e.g. 15-25% for aerospace/defence-tech at scale). "
+        f"Set High Growth Rate to reflect the revenue ramp (trailing: {growth_pct}). "
+        f"The DCF will produce a meaningful output once the margin trajectory offsets early losses. "
+        f"This is expected behaviour for pre-profit story stocks, not a data error. "
+        f"Damodaran: For young money-losing companies, value is almost entirely in the terminal value "
+        f"and the pathway to profitability."
+    )
 
 consistency_score, critiques = calculate_story_consistency(
     story_tam, story_moat, story_reinvestment, story_risk,
