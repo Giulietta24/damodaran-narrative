@@ -185,13 +185,19 @@ def fetch_live_crypto_prices():
     for symbol, key in [("BTC-USD", "BTC"), ("ETH-USD", "ETH")]:
         try:
             t = yf.Ticker(symbol)
-            price = t.fast_info.get("last_price")
-            if price and float(price) > 1:
-                prices[key] = float(price)
-            else:
-                hist = t.history(period="1d")
-                if not hist.empty:
-                    prices[key] = float(hist["Close"].iloc[-1])
+            try:
+                price = t.fast_info.last_price
+                if price and float(price) > 1:
+                    prices[key] = float(price)
+            except Exception:
+                pass
+            if prices[key] is None:
+                try:
+                    hist = t.history(period="2d")
+                    if not hist.empty:
+                        prices[key] = float(hist["Close"].iloc[-1])
+                except Exception:
+                    pass
         except Exception:
             pass
     return prices
@@ -275,8 +281,22 @@ def fetch_stock_data(ticker_symbol):
         if not info:
             raise ValueError("No info returned")
 
-        live_price = (info.get("currentPrice") or info.get("regularMarketPrice")
-                      or info.get("previousClose"))
+        # fast_info.last_price is attribute access — NOT dict .get()
+        live_price = None
+        try:
+            live_price = ticker.fast_info.last_price
+        except Exception:
+            pass
+        if not live_price:
+            live_price = (info.get("currentPrice") or info.get("regularMarketPrice")
+                          or info.get("previousClose"))
+        if not live_price:
+            try:
+                hist = ticker.history(period="2d")
+                if not hist.empty:
+                    live_price = float(hist["Close"].iloc[-1])
+            except Exception:
+                pass
         if live_price is None:
             raise ValueError("No live price available")
 
@@ -753,6 +773,26 @@ damodaran_df = load_damodaran_industry_data()
 if not api_success:
     st.sidebar.warning(f"⚠️ Yahoo Finance lookup failed. Using generic fallback for '{ticker_input}'.")
 
+# ── Network connectivity check ───────────────────────────────────────────
+# yfinance requires access to query1.finance.yahoo.com and query2.finance.yahoo.com.
+# If those domains are blocked (firewall, corporate proxy, cloud deployment),
+# ALL tickers will show stale fallback prices regardless of code changes.
+# Solution: run the dashboard locally, or whitelist the Yahoo Finance domains
+# in your network/firewall settings.
+if stock_data.get("data_source") in ("fallback", "demo") and stock_data.get("price_as_of") != "live":
+    st.error(
+        f"🌐 **Network Issue — Yahoo Finance Cannot Be Reached**\n\n"
+        f"Live price data for **{ticker_input}** is unavailable. "
+        f"The dashboard is showing a **stale fallback price of ${stock_data['current_price']:.2f}** "
+        f"which may be significantly out of date.\n\n"
+        f"**To fix this:**\n"
+        f"* If running locally: check your internet connection\n"
+        f"* If deployed on a server: whitelist `query1.finance.yahoo.com` and "
+        f"`query2.finance.yahoo.com` in your firewall/egress settings\n"
+        f"* If using Streamlit Cloud: this is a known yfinance limitation — "
+        f"consider switching to a paid data provider (Alpha Vantage, Polygon.io)"
+    )
+
 # ── Live price override — separate fast fetch, not cached ────────────────
 # fetch_stock_data is cached for 60s for fundamentals (expensive to fetch).
 # Price can go stale in that window. This separate call always fetches live
@@ -763,12 +803,18 @@ def _fetch_live_price_uncached(ticker: str):
     """No cache — always fetches the freshest available price."""
     try:
         t = yf.Ticker(ticker)
-        price = t.fast_info.get("last_price")
-        if price and float(price) > 0.01:
-            return float(price)
-        price = t.fast_info.get("previous_close")
-        if price and float(price) > 0.01:
-            return float(price)
+        try:
+            price = t.fast_info.last_price
+            if price and float(price) > 0.01:
+                return float(price)
+        except Exception:
+            pass
+        try:
+            price = t.fast_info.previous_close
+            if price and float(price) > 0.01:
+                return float(price)
+        except Exception:
+            pass
         info = t.info or {}
         price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
         if price:
