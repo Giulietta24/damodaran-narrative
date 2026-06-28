@@ -905,27 +905,37 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔢 Step 2: Fine-Tune the Drivers")
 slider_key = f"{story_tam[:6]}_{story_moat[:6]}_{story_reinvestment[:6]}_{story_risk[:6]}_{stock_data['ticker']}"
 
-growth_rate    = st.sidebar.slider("High Growth Rate (Yr 1-5)",            0.0, 0.80, float(calc_growth), 0.01, format="%.0f%%", key=f"g_{slider_key}")
-target_margin  = st.sidebar.slider("Target Operating Margin (Yr 5)",       -0.10, 0.60, float(calc_margin), 0.01, format="%.0f%%", key=f"m_{slider_key}")
-sales_to_cap   = st.sidebar.slider("Capital Efficiency (Sales-to-Capital)", 0.1, 5.0,  float(calc_sc),     0.1,  key=f"sc_{slider_key}")
-cost_of_capital = st.sidebar.slider("Cost of Capital (WACC)",              0.04, 0.20, float(calc_wacc),   0.005, format="%.1f%%", key=f"w_{slider_key}")
+# Sliders display whole-number percentages (e.g. 25 = 25%).
+# Values are divided by 100 when passed to the DCF and Monte Carlo functions.
+growth_rate_pct    = st.sidebar.slider("High Growth Rate % (Yr 1-5)",           0, 80,   int(round(calc_growth * 100)),  1,   format="%d%%", key=f"g_{slider_key}")
+target_margin_pct  = st.sidebar.slider("Target Operating Margin % (Yr 5)",     -10, 60,  int(round(calc_margin * 100)),  1,   format="%d%%", key=f"m_{slider_key}")
+sales_to_cap       = st.sidebar.slider("Capital Efficiency (Sales-to-Capital)", 0.1, 5.0, float(calc_sc),                0.1,              key=f"sc_{slider_key}")
+cost_of_capital_pct = st.sidebar.slider("Cost of Capital / WACC %",             4,  20,  int(round(calc_wacc * 100)),    1,   format="%d%%", key=f"w_{slider_key}")
+
+# Convert back to decimals for all downstream calculations
+growth_rate     = growth_rate_pct    / 100.0
+target_margin   = target_margin_pct  / 100.0
+cost_of_capital = cost_of_capital_pct / 100.0
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🌍 Advanced Model Settings")
 
 # FIX: Tax rate as user input — critical for non-US companies
-tax_rate_input = st.sidebar.slider(
-    "Corporate Tax Rate",
-    min_value=0.05, max_value=0.35, value=0.21, step=0.01,
-    format="%.0f%%",
-    help="Default 21% (US). Adjust for non-US: UK=25%, Ireland=12.5%, Singapore=17%, Germany=30%"
+tax_rate_pct = st.sidebar.slider(
+    "Corporate Tax Rate %",
+    min_value=5, max_value=35, value=21, step=1,
+    format="%d%%",
+    help="Default 21% (US). UK=25%, Ireland=12.5%, Singapore=17%, Germany=30%"
 )
-terminal_growth_input = st.sidebar.slider(
-    "Terminal Growth Rate",
-    min_value=0.00, max_value=0.05, value=0.025, step=0.005,
-    format="%.1f%%",
-    help="Long-run nominal GDP growth. Damodaran typically uses 2.5% for US, lower for mature economies."
+tax_rate_input = tax_rate_pct / 100.0
+
+terminal_growth_pct = st.sidebar.slider(
+    "Terminal Growth Rate %",
+    min_value=0, max_value=5, value=3, step=1,
+    format="%d%%",
+    help="Long-run nominal GDP growth. Damodaran uses 2-3% for US, lower for mature economies."
 )
+terminal_growth_input = terminal_growth_pct / 100.0
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🪙 Step 3: Non-Operating Strategic Holdings")
